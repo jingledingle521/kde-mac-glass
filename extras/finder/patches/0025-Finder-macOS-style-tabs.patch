@@ -1,0 +1,310 @@
+From d092433dda437a1760224b0d7e80fc4f8ad40152 Mon Sep 17 00:00:00 2001
+From: Brhett <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 14:31:39 -0500
+Subject: [PATCH 25/30] Finder: macOS-style tabs
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Equal-width tabs across a faint rounded strip, centered titles without
+icons, a gray pill for the current tab, a close × on the left of the
+hovered tab, and + at the end for a new tab. Recents' tab is named
+"Recents", and the sidebar, title and column view follow tab switches.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ src/dolphintabbar.cpp       | 118 +++++++++++++++++++++++++++++++-----
+ src/dolphintabbar.h         |   9 +++
+ src/dolphintabwidget.cpp    |  20 +++++-
+ src/finder/finderchrome.cpp |  15 +++++
+ 4 files changed, 145 insertions(+), 17 deletions(-)
+
+diff --git a/src/dolphintabbar.cpp b/src/dolphintabbar.cpp
+index af08d25b4..a924abe0e 100644
+--- a/src/dolphintabbar.cpp
++++ b/src/dolphintabbar.cpp
+@@ -12,6 +12,8 @@
+ #include <QInputDialog>
+ #include <QMenu>
+ #include <QMimeData>
++#include <QMouseEvent>
++#include <QPainter>
+ #include <QTimer>
+ 
+ class PreventFocusWhileHidden : public QObject
+@@ -44,6 +46,8 @@ DolphinTabBar::DolphinTabBar(QWidget *parent)
+     setSelectionBehaviorOnRemove(QTabBar::SelectPreviousTab);
+     setMovable(true);
+     setTabsClosable(true);
++    setMouseTracking(true); // Finder: hover shows the tab's ×
++    setDrawBase(false);
+ 
+     setFocusPolicy(Qt::NoFocus);
+     installEventFilter(new PreventFocusWhileHidden(this));
+@@ -59,6 +63,10 @@ DolphinTabBar::DolphinTabBar(QWidget *parent)
+ 
+ QSize DolphinTabBar::tabSizeHint(int index) const
+ {
++    // Finder: tabs share the bar's width equally, at a fixed height.
++    if (count() > 0) {
++        return QSize(qMax(60, width() / count()), 34);
++    }
+     if (GeneralSettings::tabStyle() == GeneralSettings::EnumTabStyle::FixedSize) {
+         QSize defaultSize = QTabBar::tabSizeHint(index);
+         defaultSize.setWidth(225);
+@@ -73,12 +81,10 @@ QSize DolphinTabBar::tabSizeHint(int index) const
+ 
+ QSize DolphinTabBar::minimumSizeHint() const
+ {
++    // Finder: tabs size to the bar (see tabSizeHint), so the bar must never
++    // ask for their sum, or the window keeps growing.
+     QSize s = QTabBar::minimumSizeHint();
+-
+-    if (GeneralSettings::tabStyle() == GeneralSettings::EnumTabStyle::FullWidth) {
+-        s.setWidth(0); // allow shrinking
+-    }
+-
++    s.setWidth(0);
+     return s;
+ }
+ 
+@@ -130,10 +136,86 @@ void DolphinTabBar::dropEvent(QDropEvent *event)
+     QTabBar::dropEvent(event);
+ }
+ 
++QRect DolphinTabBar::closeRect(int index) const
++{
++    const QRect tab = tabRect(index);
++    return QRect(tab.left() + 12, tab.center().y() - 8, 16, 16);
++}
++
++void DolphinTabBar::paintEvent(QPaintEvent *)
++{
++    QPainter p(this);
++    p.setRenderHint(QPainter::Antialiasing);
++
++    // The strip: a faint rounded track the tabs sit in.
++    const QRectF track = QRectF(rect()).adjusted(8, 3, -4, -3);
++    p.setPen(Qt::NoPen);
++    p.setBrush(QColor(255, 255, 255, 12));
++    p.drawRoundedRect(track, track.height() / 2, track.height() / 2);
++
++    const int current = currentIndex();
++    for (int i = 0; i < count(); ++i) {
++        const QRectF tab = QRectF(tabRect(i)).intersected(track).adjusted(2, 2, -2, -2);
++        const bool selected = i == current;
++        const bool hovered = i == m_hoveredTab || i == m_autoActivationIndex;
++        if (selected || hovered) {
++            p.setPen(Qt::NoPen);
++            p.setBrush(selected ? QColor(255, 255, 255, 34) : QColor(255, 255, 255, 14));
++            p.drawRoundedRect(tab, tab.height() / 2, tab.height() / 2);
++        } else if (i + 1 < count() && i + 1 != current && i != current) {
++            // Thin divider between two unselected tabs.
++            p.fillRect(QRectF(tab.right() + 1.5, tab.top() + 7, 1, tab.height() - 14), QColor(255, 255, 255, 30));
++        }
++
++        // Title, centered; the × takes its place on the left while hovered.
++        p.setPen(selected ? QColor(255, 255, 255, 235) : QColor(255, 255, 255, 150));
++        p.setFont(font());
++        const QRectF textRect = tab.adjusted(30, 0, -30, 0);
++        p.drawText(textRect, Qt::AlignCenter, fontMetrics().elidedText(tabText(i).replace(QLatin1String("&&"), QLatin1String("&")), Qt::ElideMiddle, int(textRect.width())));
++
++        if (hovered && count() > 1) {
++            const QRectF x = QRectF(closeRect(i));
++            if (m_pressedClose == i) {
++                p.setPen(Qt::NoPen);
++                p.setBrush(QColor(255, 255, 255, 40));
++                p.drawEllipse(x);
++            }
++            p.setPen(QPen(QColor(255, 255, 255, 200), 1.4, Qt::SolidLine, Qt::RoundCap));
++            const QPointF c = x.center();
++            p.drawLine(c + QPointF(-3.5, -3.5), c + QPointF(3.5, 3.5));
++            p.drawLine(c + QPointF(-3.5, 3.5), c + QPointF(3.5, -3.5));
++        }
++    }
++}
++
++void DolphinTabBar::mouseMoveEvent(QMouseEvent *event)
++{
++    const int index = tabAt(event->pos());
++    if (index != m_hoveredTab) {
++        m_hoveredTab = index;
++        update();
++    }
++    QTabBar::mouseMoveEvent(event);
++}
++
++void DolphinTabBar::leaveEvent(QEvent *event)
++{
++    m_hoveredTab = -1;
++    m_pressedClose = -1;
++    update();
++    QTabBar::leaveEvent(event);
++}
++
+ void DolphinTabBar::mousePressEvent(QMouseEvent *event)
+ {
+     const int index = tabAt(event->pos());
+ 
++    if (index >= 0 && event->button() == Qt::LeftButton && count() > 1 && closeRect(index).contains(event->pos())) {
++        m_pressedClose = index; // closes on release, if still over the ×
++        update();
++        return;
++    }
++
+     if (index >= 0 && event->button() == Qt::MiddleButton) {
+         m_tabToBeClosedOnMiddleMouseButtonRelease = index;
+         return;
+@@ -146,6 +228,16 @@ void DolphinTabBar::mouseReleaseEvent(QMouseEvent *event)
+ {
+     const int index = tabAt(event->pos());
+ 
++    if (m_pressedClose >= 0 && event->button() == Qt::LeftButton) {
++        const int pressed = m_pressedClose;
++        m_pressedClose = -1;
++        update();
++        if (index == pressed && closeRect(index).contains(event->pos())) {
++            Q_EMIT tabCloseRequested(index);
++        }
++        return;
++    }
++
+     if (index >= 0 && index == m_tabToBeClosedOnMiddleMouseButtonRelease && event->button() == Qt::MiddleButton) {
+         // Mouse middle click on a tab closes this tab.
+         Q_EMIT tabCloseRequested(index);
+@@ -233,17 +325,11 @@ void DolphinTabBar::contextMenuEvent(QContextMenuEvent *event)
+ 
+ void DolphinTabBar::slotTabBarChanged()
+ {
+-    if (GeneralSettings::tabStyle() == GeneralSettings::EnumTabStyle::FixedSize) {
+-        setExpanding(false);
+-        setUsesScrollButtons(true);
+-    } else if (GeneralSettings::tabStyle() == GeneralSettings::EnumTabStyle::FullWidth) {
+-        setExpanding(true);
+-        setUsesScrollButtons(false);
+-    } else {
+-        setExpanding(false);
+-        setUsesScrollButtons(true);
+-    }
+-
++    // Finder: always full width, with our own × (not Qt's close buttons);
++    // the tab style and close-button settings don't apply.
++    setTabsClosable(false);
++    setExpanding(true);
++    setUsesScrollButtons(false);
+     updateGeometry();
+ }
+ 
+diff --git a/src/dolphintabbar.h b/src/dolphintabbar.h
+index 8faccdd50..c5af3cc01 100644
+--- a/src/dolphintabbar.h
++++ b/src/dolphintabbar.h
+@@ -33,6 +33,10 @@ protected:
+     void mousePressEvent(QMouseEvent *event) override;
+     void mouseReleaseEvent(QMouseEvent *event) override;
+     void mouseDoubleClickEvent(QMouseEvent *event) override;
++    void mouseMoveEvent(QMouseEvent *event) override;
++    void leaveEvent(QEvent *event) override;
++    /** Finder: draws the tabs itself (equal widths, gray selected pill, × on hover). */
++    void paintEvent(QPaintEvent *event) override;
+ 
+     /**
+      * Opens a context menu for the tab on the \a event position.
+@@ -50,10 +54,15 @@ private:
+      */
+     void updateAutoActivationTimer(const int index);
+ 
++    /** Finder: the close "×" on the left of tab @p index. */
++    QRect closeRect(int index) const;
++
+ private:
+     QTimer *m_autoActivationTimer;
+     int m_autoActivationIndex;
+     int m_tabToBeClosedOnMiddleMouseButtonRelease = -1;
++    int m_hoveredTab = -1;
++    int m_pressedClose = -1;
+ };
+ 
+ #endif // DOLPHIN_TAB_BAR_H
+diff --git a/src/dolphintabwidget.cpp b/src/dolphintabwidget.cpp
+index 7fbf10b19..73f5ca90b 100644
+--- a/src/dolphintabwidget.cpp
++++ b/src/dolphintabwidget.cpp
+@@ -20,6 +20,7 @@
+ #include <kio/global.h>
+ 
+ #include <QApplication>
++#include <QToolButton>
+ #include <QDropEvent>
+ #include <QStackedWidget>
+ 
+@@ -45,7 +46,20 @@ DolphinTabWidget::DolphinTabWidget(DolphinNavigatorsWidgetAction *navigatorsWidg
+     setElideMode(Qt::ElideRight);
+     setUsesScrollButtons(true);
+     setTabBarAutoHide(!GeneralSettings::alwaysShowTabBar());
+-    tabBar->setTabsClosable(GeneralSettings::showCloseButtonOnTabs());
++    tabBar->setTabsClosable(false); // Finder: the tab bar draws its own ×
++
++    // Finder: "+" at the right end of the tab strip opens a new tab.
++    auto *newTab = new QToolButton(this);
++    newTab->setText(QStringLiteral("+"));
++    newTab->setToolTip(i18nc("@info:tooltip", "New Tab"));
++    newTab->setAutoRaise(true);
++    newTab->setFixedSize(34, 34);
++    newTab->setStyleSheet(QStringLiteral("QToolButton { color: rgba(255,255,255,190); font-size: 17px; border: none; border-radius: 13px; margin: 4px; }"
++                                         "QToolButton:hover { background: rgba(255,255,255,24); }"));
++    connect(newTab, &QToolButton::clicked, this, [this]() {
++        openNewActivatedTab();
++    });
++    setCornerWidget(newTab, Qt::TopRightCorner);
+ 
+     auto stackWidget{findChild<QStackedWidget *>()};
+     // i18n: This accessible name will be announced any time the user moves keyboard focus e.g. from the toolbar or the places panel towards the main working
+@@ -549,6 +563,10 @@ QString DolphinTabWidget::tabName(DolphinTabPage *tabPage) const
+         }
+     } else {
+         name = tabPage->activeViewContainer()->caption();
++        // Finder: the sidebar's name for Recents.
++        if (tabPage->activeViewContainer()->url().scheme() == QLatin1String("recentlyused")) {
++            name = i18nc("@title:tab Finder", "Recents");
++        }
+     }
+     // clang-format on
+ 
+diff --git a/src/finder/finderchrome.cpp b/src/finder/finderchrome.cpp
+index 801b3125e..2e9cf874b 100644
+--- a/src/finder/finderchrome.cpp
++++ b/src/finder/finderchrome.cpp
+@@ -13,6 +13,7 @@
+ 
+ #include "dolphinmainwindow.h"
+ #include "dolphinviewcontainer.h"
++#include "dolphintabwidget.h"
+ #include "statusbar/dolphinstatusbar.h"
+ #include "views/dolphinview.h"
+ 
+@@ -409,6 +410,20 @@ void FinderChrome::setToolBar(QToolBar *toolBar)
+                 showAirDrop({});
+             });
+         }
++        // Switching tabs: the sidebar, title and overlays follow the new tab.
++        if (auto *tabs = m_window->findChild<DolphinTabWidget *>()) {
++            connect(tabs, &DolphinTabWidget::activeViewChanged, this, [this](DolphinViewContainer *container) {
++                hideAirDrop();
++                if (m_finderSidebar && container) {
++                    m_finderSidebar->setUrl(container->url());
++                }
++                updateTitle();
++                placeTransfers();
++                if (m_columnMode) {
++                    QTimer::singleShot(0, this, &FinderChrome::attachColumns);
++                }
++            });
++        }
+         connect(qobject_cast<DolphinMainWindow *>(m_window), &DolphinMainWindow::urlChanged, this, [this]() {
+             hideAirDrop();
+             if (m_columnMode) {
+-- 
+2.56.0
+

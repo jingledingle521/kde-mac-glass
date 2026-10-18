@@ -1,0 +1,175 @@
+From 8dbb0481fbd19768d20dba6d1d9c3f8af0e20855 Mon Sep 17 00:00:00 2001
+From: Brhett <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 14:17:27 -0500
+Subject: [PATCH 23/30] Finder: consistent Recents (title, columns), group
+ headers, no stray chevrons
+
+- Recents is titled "Recents" like the sidebar, and lists Date Last
+  Opened, Size and Kind like any other folder.
+- Group titles are semibold with a hairline under each group; grouped
+  lists have no zebra stripes (rows restart per group).
+- Disk images and archives that KIO lists as folders show as files: no
+  disclosure chevron, and "--" for an unknown size.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ src/finder/finderchrome.cpp                     |  8 ++++++++
+ src/kitemviews/kfileitemlistwidget.cpp          |  4 +++-
+ src/kitemviews/kfileitemmodel.cpp               | 12 +++++++++---
+ src/kitemviews/kitemlistview.cpp                |  3 ++-
+ src/kitemviews/kstandarditemlistgroupheader.cpp | 15 +++++++++++++--
+ src/kitemviews/kstandarditemlistwidget.cpp      |  4 +++-
+ src/views/viewproperties.cpp                    |  3 ++-
+ 7 files changed, 40 insertions(+), 9 deletions(-)
+
+diff --git a/src/finder/finderchrome.cpp b/src/finder/finderchrome.cpp
+index 9868de495..801b3125e 100644
+--- a/src/finder/finderchrome.cpp
++++ b/src/finder/finderchrome.cpp
+@@ -742,6 +742,14 @@ void FinderChrome::updateTitle()
+     if (dash > 0) {
+         text = text.left(dash);
+     }
++    // Use the sidebar's names for places Dolphin titles differently.
++    if (auto *window = qobject_cast<DolphinMainWindow *>(m_window)) {
++        if (DolphinViewContainer *container = window->activeViewContainer()) {
++            if (container->url().scheme() == QLatin1String("recentlyused")) {
++                text = i18nc("@title Finder window", "Recents");
++            }
++        }
++    }
+     m_title->setText(text);
+     updateTitleColor();
+ }
+diff --git a/src/kitemviews/kfileitemlistwidget.cpp b/src/kitemviews/kfileitemlistwidget.cpp
+index bc226f73d..75dc5b412 100644
+--- a/src/kitemviews/kfileitemlistwidget.cpp
++++ b/src/kitemviews/kfileitemlistwidget.cpp
+@@ -94,7 +94,9 @@ QString KFileItemListWidgetInformant::roleText(const QByteArray &role, const QHa
+     };
+ 
+     if (role == "size" && forUsageAs == KStandardItemListWidgetInformant::ForUsageAs::DisplayedText) {
+-        text = values.value("isDir").toBool() ? QStringLiteral("--") : finderSize(roleValue.value<KIO::filesize_t>());
++        // Unknown sizes come through as -1 (or nothing): show "--", not 18 exabytes.
++        const bool unknown = roleValue.isNull() || roleValue.toLongLong() < 0;
++        text = values.value("isDir").toBool() || unknown ? QStringLiteral("--") : finderSize(roleValue.value<KIO::filesize_t>());
+     } else if (role == "size") {
+         if (values.value("isDir").toBool()) {
+             if (!roleValue.isNull() && roleValue != -1) {
+diff --git a/src/kitemviews/kfileitemmodel.cpp b/src/kitemviews/kfileitemmodel.cpp
+index 7666c5d8e..aab36189a 100644
+--- a/src/kitemviews/kfileitemmodel.cpp
++++ b/src/kitemviews/kfileitemmodel.cpp
+@@ -925,7 +925,8 @@ bool KFileItemModel::isExpandable(int index) const
+     if (index >= 0 && index < count()) {
+         // Call data (instead of accessing m_itemData directly)
+         // to ensure that the value is initialized.
+-        return data(index).value("isExpandable").toBool();
++        const QHash<QByteArray, QVariant> values = data(index);
++        return values.value("isExpandable").toBool() && values.value("isDir").toBool(); // Finder: folders only
+     }
+     return false;
+ }
+@@ -2189,7 +2190,12 @@ QHash<QByteArray, QVariant> KFileItemModel::retrieveData(const KFileItem &item,
+     QHash<QByteArray, QVariant> data;
+     data.insert(sharedValue("url"), item.url());
+ 
+-    const bool isDir = item.isDir();
++    // Finder: a disk image or archive that KIO lists as a folder (in Recents,
++    // say) still shows as a file: its size, no disclosure chevron. Opening it
++    // goes by the KFileItem, so it still opens the same way.
++    const QString mime = item.mimetype();
++    const bool isDir = item.isDir() && (mime.isEmpty() || mime == QLatin1String("inode/directory") || !item.currentMimeType().isValid()
++                                        || item.currentMimeType().inherits(QStringLiteral("inode/directory")));
+     if (m_requestRole[IsDirRole] && isDir) {
+         data.insert(sharedValue("isDir"), true);
+     }
+@@ -3121,7 +3127,7 @@ const KFileItemModel::RoleInfoMap *KFileItemModel::rolesInfoMap(int &count)
+         { "size",                SizeRole,                kli18nc("@label", "Size"),                 KLazyLocalizedString(),        KLazyLocalizedString(),                    false,           false },
+         { "modificationtime",    ModificationTimeRole,    kli18nc("@label", "Date Modified"),            KLazyLocalizedString(),        kli18nc("@tooltip", "The date format can be selected in settings."),                    false,           false },
+         { "creationtime",        CreationTimeRole,        kli18nc("@label", "Created"),              KLazyLocalizedString(),        kli18nc("@tooltip", "The date format can be selected in settings."),                    false,           false },
+-        { "accesstime",          AccessTimeRole,          kli18nc("@label", "Accessed"),             KLazyLocalizedString(),        kli18nc("@tooltip", "The date format can be selected in settings."),                    false,           false },
++        { "accesstime",          AccessTimeRole,          kli18nc("@label", "Date Last Opened"),             KLazyLocalizedString(),        kli18nc("@tooltip", "The date format can be selected in settings."),                    false,           false },
+         { "type",                TypeRole,                kli18nc("@label", "Kind"),                 KLazyLocalizedString(),        KLazyLocalizedString(),                    false,           false },
+         { "rating",              RatingRole,              kli18nc("@label", "Rating"),               KLazyLocalizedString(),        KLazyLocalizedString(),                    true,            false },
+         { "tags",                TagsRole,                kli18nc("@label", "Tags"),                 KLazyLocalizedString(),        KLazyLocalizedString(),                    true,            false },
+diff --git a/src/kitemviews/kitemlistview.cpp b/src/kitemviews/kitemlistview.cpp
+index 8b23245ec..a1310d6a5 100644
+--- a/src/kitemviews/kitemlistview.cpp
++++ b/src/kitemviews/kitemlistview.cpp
+@@ -2417,7 +2417,8 @@ void KItemListView::updateAlternateBackgroundForWidget(KItemListWidget *widget)
+ 
+ bool KItemListView::useAlternateBackgrounds() const
+ {
+-    return m_alternateBackgrounds && m_itemSize.isEmpty();
++    // Finder: no zebra stripes while the list is grouped.
++    return m_alternateBackgrounds && m_itemSize.isEmpty() && !m_grouped;
+ }
+ 
+ QHash<QByteArray, qreal> KItemListView::preferredColumnWidths(const KItemRangeList &itemRanges) const
+diff --git a/src/kitemviews/kstandarditemlistgroupheader.cpp b/src/kitemviews/kstandarditemlistgroupheader.cpp
+index 5b93091d2..5455085d5 100644
+--- a/src/kitemviews/kstandarditemlistgroupheader.cpp
++++ b/src/kitemviews/kstandarditemlistgroupheader.cpp
+@@ -32,8 +32,13 @@ void KStandardItemListGroupHeader::paint(QPainter *painter, const QStyleOptionGr
+ void KStandardItemListGroupHeader::paintRole(QPainter *painter, const QRectF &roleBounds, const QColor &color)
+ {
+     if (m_pixmap.isNull()) {
+-        painter->setPen(color);
+-        painter->drawText(roleBounds, 0, m_text);
++        // Finder: group titles ("Today", "Yesterday") in semibold.
++        Q_UNUSED(color)
++        QFont bold = font();
++        bold.setWeight(QFont::DemiBold);
++        painter->setFont(bold);
++        painter->setPen(QColor(255, 255, 255, 220));
++        painter->drawText(roleBounds, Qt::AlignVCenter | Qt::AlignLeft, m_text);
+     } else {
+         painter->drawPixmap(roleBounds.topLeft(), m_pixmap);
+     }
+@@ -41,6 +46,12 @@ void KStandardItemListGroupHeader::paintRole(QPainter *painter, const QRectF &ro
+ 
+ void KStandardItemListGroupHeader::paintSeparator(QPainter *painter, const QColor &color)
+ {
++    // Finder: a faint hairline under every group title, inset like the rows.
++    if (scrollOrientation() == Qt::Vertical) {
++        Q_UNUSED(color)
++        painter->fillRect(QRectF(8, size().height() - 1, size().width() - 16, 1), QColor(255, 255, 255, 26));
++        return;
++    }
+     if (itemIndex() == 0) {
+         // No top- or left-line should be drawn for the first group-header
+         return;
+diff --git a/src/kitemviews/kstandarditemlistwidget.cpp b/src/kitemviews/kstandarditemlistwidget.cpp
+index eeee49475..8932f7587 100644
+--- a/src/kitemviews/kstandarditemlistwidget.cpp
++++ b/src/kitemviews/kstandarditemlistwidget.cpp
+@@ -1072,7 +1072,9 @@ void KStandardItemListWidget::triggerCacheRefreshing()
+     refreshCache();
+ 
+     const QHash<QByteArray, QVariant> values = data();
+-    m_isExpandable = m_supportsItemExpanding && values["isExpandable"].toBool();
++    // Finder: only folders get a disclosure chevron (not disk images and
++    // archives that KIO could open like folders).
++    m_isExpandable = m_supportsItemExpanding && values["isExpandable"].toBool() && values["isDir"].toBool();
+     m_isHidden = isHidden();
+     m_customizedFont = customizedFont(styleOption().font);
+     m_customizedFontMetrics = QFontMetrics(m_customizedFont);
+diff --git a/src/views/viewproperties.cpp b/src/views/viewproperties.cpp
+index c871c75d3..ab6a57225 100644
+--- a/src/views/viewproperties.cpp
++++ b/src/views/viewproperties.cpp
+@@ -266,7 +266,8 @@ ViewProperties::ViewProperties(const QUrl &url)
+             if (useRecentDocumentsView) {
+                 setSortRole(QByteArrayLiteral("accesstime"));
+                 setViewMode(DolphinView::DetailsView);
+-                setVisibleRoles({"text", "path", "accesstime"});
++                // Finder: the same columns as any folder, with Date Last Opened.
++                setVisibleRoles({"text", "accesstime", "size", "type"});
+             } else {
+                 setSortRole(QByteArrayLiteral("modificationtime"));
+             }
+-- 
+2.56.0
+

@@ -1,0 +1,85 @@
+From 10f1e5ab8076f16ed8c1f6dda504ac81c7416fd4 Mon Sep 17 00:00:00 2001
+From: Brhett <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 11:11:15 -0500
+Subject: [PATCH 07/30] Finder: seamless content area, zoom slider in footer,
+ active sidebar tint
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ src/finder/finderchrome.cpp               | 4 +++-
+ src/finder/findersidebar.cpp              | 2 +-
+ src/kitemviews/kitemlistcontainer.cpp     | 7 +++++++
+ src/settings/dolphin_generalsettings.kcfg | 2 +-
+ 4 files changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/src/finder/finderchrome.cpp b/src/finder/finderchrome.cpp
+index 7c3ce850d..f5320ce49 100644
+--- a/src/finder/finderchrome.cpp
++++ b/src/finder/finderchrome.cpp
+@@ -533,8 +533,10 @@ bool FinderChrome::eventFilter(QObject *watched, QEvent *event)
+     if (watched == m_window) {
+         switch (event->type()) {
+         case QEvent::Paint:
++            // The window paints only our background; QMainWindow's own paint
++            // would lay the style's window color over the glass.
+             paintBackground();
+-            break;
++            return true;
+         case QEvent::ChildPolished:
+             // KXMLGUI rebuilds toolbars (e.g. after loading saved settings);
+             // move the stoplights to the new one.
+diff --git a/src/finder/findersidebar.cpp b/src/finder/findersidebar.cpp
+index 0f36c9a3e..c7949a0b4 100644
+--- a/src/finder/findersidebar.cpp
++++ b/src/finder/findersidebar.cpp
+@@ -77,7 +77,7 @@ public:
+         p->save();
+         p->setRenderHint(QPainter::Antialiasing);
+         const QRect r = option.rect;
+-        const bool active = option.state & QStyle::State_Active;
++        const bool active = option.widget ? option.widget->isActiveWindow() : bool(option.state & QStyle::State_Active);
+ 
+         if (index.data(FinderSidebar::HeaderRole).toBool()) {
+             QFont f = option.font;
+diff --git a/src/kitemviews/kitemlistcontainer.cpp b/src/kitemviews/kitemlistcontainer.cpp
+index b221ca5ff..1ac989c9a 100644
+--- a/src/kitemviews/kitemlistcontainer.cpp
++++ b/src/kitemviews/kitemlistcontainer.cpp
+@@ -46,6 +46,12 @@ KItemListContainerViewport::KItemListContainerViewport(QGraphicsScene *scene, QW
+     setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+     setViewportMargins(0, 0, 0, 0);
+     setFrameShape(QFrame::NoFrame);
++    // Finder: the window paints the content background.
++    QPalette pal = palette();
++    pal.setColor(QPalette::Base, Qt::transparent);
++    setPalette(pal);
++    setBackgroundBrush(Qt::NoBrush);
++    viewport()->setAutoFillBackground(false);
+ }
+ 
+ void KItemListContainerViewport::wheelEvent(QWheelEvent *event)
+@@ -67,6 +73,7 @@ KItemListContainer::KItemListContainer(KItemListController *controller, QWidget
+ 
+     QGraphicsView *graphicsView = new KItemListContainerViewport(new QGraphicsScene(this), this);
+     setViewport(graphicsView);
++    setFrameShape(QFrame::NoFrame); // Finder: no box around the files
+ 
+     m_horizontalSmoothScroller = new KItemListSmoothScroller(horizontalScrollBar(), this);
+     m_verticalSmoothScroller = new KItemListSmoothScroller(verticalScrollBar(), this);
+diff --git a/src/settings/dolphin_generalsettings.kcfg b/src/settings/dolphin_generalsettings.kcfg
+index f68b41fd8..d191b978d 100644
+--- a/src/settings/dolphin_generalsettings.kcfg
++++ b/src/settings/dolphin_generalsettings.kcfg
+@@ -152,7 +152,7 @@
+         </entry>
+         <entry name="ShowZoomSlider" type="Bool">
+             <label>Show zoom slider in the statusbar</label>
+-            <default>false</default>
++            <default>true</default>
+         </entry>
+         <entry name="LockPanels" type="Bool">
+             <label>Lock the layout of the panels</label>
+-- 
+2.56.0
+

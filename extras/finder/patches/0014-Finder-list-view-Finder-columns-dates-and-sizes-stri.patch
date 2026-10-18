@@ -1,0 +1,228 @@
+From d3e3742551096da18dc2f8af211cd1f8babc5258 Mon Sep 17 00:00:00 2001
+From: Brhett <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 12:28:52 -0500
+Subject: [PATCH 14/30] Finder list view: Finder columns, dates and sizes,
+ stripes fill the view, aligned Name title
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ src/kitemviews/kfileitemlistwidget.cpp        | 34 ++++++++++++++++-
+ src/kitemviews/kfileitemmodel.cpp             |  4 +-
+ src/kitemviews/kitemlistview.cpp              | 38 +++++++++++++++++++
+ .../private/kitemlistheaderwidget.cpp         | 13 ++++++-
+ .../private/kitemlistheaderwidget.h           |  4 ++
+ src/settings/dolphin_detailsmodesettings.kcfg |  2 +-
+ src/views/viewproperties.cpp                  |  4 +-
+ 7 files changed, 93 insertions(+), 6 deletions(-)
+
+diff --git a/src/kitemviews/kfileitemlistwidget.cpp b/src/kitemviews/kfileitemlistwidget.cpp
+index ccb1819af..bc226f73d 100644
+--- a/src/kitemviews/kfileitemlistwidget.cpp
++++ b/src/kitemviews/kfileitemlistwidget.cpp
+@@ -16,6 +16,7 @@
+ 
+ #include <QGraphicsScene>
+ #include <QGraphicsView>
++#include <QRegularExpression>
+ #include <QMimeDatabase>
+ 
+ KFileItemListWidgetInformant::KFileItemListWidgetInformant()
+@@ -54,6 +55,19 @@ QString KFileItemListWidgetInformant::roleText(const QByteArray &role, const QHa
+     // use a hash + switch for a linear runtime.
+ 
+     auto formatDate = [formatter, local, forUsageAs](const QDateTime &time) {
++        if (forUsageAs == KStandardItemListWidgetInformant::ForUsageAs::DisplayedText) {
++            // Finder: "Today at 4:49 PM", "Yesterday at …", "Sep 27, 2026 at 11:24 PM".
++            const QString clock = local.toString(time.time(), QLocale::ShortFormat);
++            const QDate day = time.date();
++            const QDate today = QDate::currentDate();
++            if (day == today) {
++                return i18nc("@item:intable Finder date", "Today at %1", clock);
++            }
++            if (day == today.addDays(-1)) {
++                return i18nc("@item:intable Finder date", "Yesterday at %1", clock);
++            }
++            return i18nc("@item:intable Finder date: day, time", "%1 at %2", local.toString(day, QStringLiteral("MMM d, yyyy")), clock);
++        }
+         if (ContentDisplaySettings::useShortRelativeDates()) {
+             return formatter.formatRelativeDateTime(time,
+                                                     forUsageAs == KStandardItemListWidgetInformant::ForUsageAs::DisplayedText ? QLocale::ShortFormat
+@@ -63,7 +77,25 @@ QString KFileItemListWidgetInformant::roleText(const QByteArray &role, const QHa
+         }
+     };
+ 
+-    if (role == "size") {
++    // Finder: decimal sizes ("193 bytes", "245 KB", "1.2 MB"), "--" for folders.
++    auto finderSize = [](KIO::filesize_t size) -> QString {
++        if (size < 1000) {
++            return i18ncp("@item:intable Finder size", "%1 byte", "%1 bytes", qulonglong(size));
++        }
++        static const char *units[] = {"KB", "MB", "GB", "TB", "PB"};
++        double value = size / 1000.0;
++        int unit = 0;
++        while (value >= 999.5 && unit < 4) {
++            value /= 1000.0;
++            ++unit;
++        }
++        const QString number = value >= 99.95 ? QString::number(qRound(value)) : QLocale().toString(value, 'f', 1).remove(QRegularExpression(QStringLiteral("[.,]0$")));
++        return number + QLatin1Char(' ') + QLatin1String(units[unit]);
++    };
++
++    if (role == "size" && forUsageAs == KStandardItemListWidgetInformant::ForUsageAs::DisplayedText) {
++        text = values.value("isDir").toBool() ? QStringLiteral("--") : finderSize(roleValue.value<KIO::filesize_t>());
++    } else if (role == "size") {
+         if (values.value("isDir").toBool()) {
+             if (!roleValue.isNull() && roleValue != -1) {
+                 // The item represents a directory.
+diff --git a/src/kitemviews/kfileitemmodel.cpp b/src/kitemviews/kfileitemmodel.cpp
+index 549217761..7666c5d8e 100644
+--- a/src/kitemviews/kfileitemmodel.cpp
++++ b/src/kitemviews/kfileitemmodel.cpp
+@@ -3119,10 +3119,10 @@ const KFileItemModel::RoleInfoMap *KFileItemModel::rolesInfoMap(int &count)
+         { nullptr,               NoRole,                  KLazyLocalizedString(),                    KLazyLocalizedString(),        KLazyLocalizedString(),                    false,           false },
+         { "text",                NameRole,                kli18nc("@label", "Name"),                 KLazyLocalizedString(),        KLazyLocalizedString(),                    false,           false },
+         { "size",                SizeRole,                kli18nc("@label", "Size"),                 KLazyLocalizedString(),        KLazyLocalizedString(),                    false,           false },
+-        { "modificationtime",    ModificationTimeRole,    kli18nc("@label", "Modified"),             KLazyLocalizedString(),        kli18nc("@tooltip", "The date format can be selected in settings."),                    false,           false },
++        { "modificationtime",    ModificationTimeRole,    kli18nc("@label", "Date Modified"),            KLazyLocalizedString(),        kli18nc("@tooltip", "The date format can be selected in settings."),                    false,           false },
+         { "creationtime",        CreationTimeRole,        kli18nc("@label", "Created"),              KLazyLocalizedString(),        kli18nc("@tooltip", "The date format can be selected in settings."),                    false,           false },
+         { "accesstime",          AccessTimeRole,          kli18nc("@label", "Accessed"),             KLazyLocalizedString(),        kli18nc("@tooltip", "The date format can be selected in settings."),                    false,           false },
+-        { "type",                TypeRole,                kli18nc("@label", "Type"),                 KLazyLocalizedString(),        KLazyLocalizedString(),                    false,           false },
++        { "type",                TypeRole,                kli18nc("@label", "Kind"),                 KLazyLocalizedString(),        KLazyLocalizedString(),                    false,           false },
+         { "rating",              RatingRole,              kli18nc("@label", "Rating"),               KLazyLocalizedString(),        KLazyLocalizedString(),                    true,            false },
+         { "tags",                TagsRole,                kli18nc("@label", "Tags"),                 KLazyLocalizedString(),        KLazyLocalizedString(),                    true,            false },
+         { "comment",             CommentRole,             kli18nc("@label", "Comment"),              KLazyLocalizedString(),        KLazyLocalizedString(),                    true,            false },
+diff --git a/src/kitemviews/kitemlistview.cpp b/src/kitemviews/kitemlistview.cpp
+index 5ff1be1a0..8b23245ec 100644
+--- a/src/kitemviews/kitemlistview.cpp
++++ b/src/kitemviews/kitemlistview.cpp
+@@ -780,6 +780,44 @@ void KItemListView::paint(QPainter *painter, const QStyleOptionGraphicsItem *opt
+ {
+     QGraphicsWidget::paint(painter, option, widget);
+ 
++    if (useAlternateBackgrounds()) {
++        // Finder: the zebra stripes carry on below the last item, filling the view.
++        KItemListWidget *last = nullptr;
++        for (auto it = m_visibleItems.constBegin(); it != m_visibleItems.constEnd(); ++it) {
++            if (!last || it.key() > last->index()) {
++                last = it.value();
++            }
++        }
++        qreal rowHeight;
++        qreal y;
++        int index;
++        if (last) {
++            rowHeight = last->size().height();
++            y = last->pos().y() + rowHeight;
++            index = last->index() + 1;
++            if (m_headerWidget->isVisible()) {
++                m_headerWidget->setNameTextX(last->pos().x() + last->textFocusRect().left() + m_styleOption.padding);
++            }
++        } else {
++            rowHeight = m_styleOption.padding * 2 + qMax(qreal(m_styleOption.iconSize), qreal(m_styleOption.fontMetrics.height()));
++            y = m_headerWidget->isVisible() ? m_headerWidget->size().height() : 0;
++            index = 0;
++        }
++        if (m_model && (!last || last->index() >= m_model->count() - 1) && rowHeight > 0) {
++            const bool dark = palette().color(QPalette::Window).lightnessF() < 0.5;
++            painter->save();
++            painter->setRenderHint(QPainter::Antialiasing);
++            painter->setPen(Qt::NoPen);
++            painter->setBrush(dark ? QColor(255, 255, 255, 14) : QColor(0, 0, 0, 10));
++            for (; y < size().height(); y += rowHeight, ++index) {
++                if (index & 1) {
++                    painter->drawRoundedRect(QRectF(8, y, size().width() - 16, rowHeight), 6, 6);
++                }
++            }
++            painter->restore();
++        }
++    }
++
+     for (auto animation : std::as_const(m_rubberBandAnimations)) {
+         QRectF rubberBandRect = animation->property(RubberPropertyName).toRectF();
+ 
+diff --git a/src/kitemviews/private/kitemlistheaderwidget.cpp b/src/kitemviews/private/kitemlistheaderwidget.cpp
+index a5a9f7e03..f92276fe0 100644
+--- a/src/kitemviews/private/kitemlistheaderwidget.cpp
++++ b/src/kitemviews/private/kitemlistheaderwidget.cpp
+@@ -159,6 +159,14 @@ qreal KItemListHeaderWidget::offset() const
+     return m_offset;
+ }
+ 
++void KItemListHeaderWidget::setNameTextX(qreal x)
++{
++    if (!qFuzzyCompare(m_nameTextX + 1, x + 1)) {
++        m_nameTextX = x;
++        update();
++    }
++}
++
+ void KItemListHeaderWidget::setSidePadding(qreal leftPaddingWidth, qreal rightPaddingWidth)
+ {
+     bool changed = false;
+@@ -476,7 +484,10 @@ void KItemListHeaderWidget::paintRole(QPainter *painter, const QByteArray &role,
+     painter->setPen(QColor(255, 255, 255, alpha));
+ 
+     const qreal chevronSpace = sorted ? 18 : 0;
+-    const QRectF textRect = rect.adjusted(10, 0, -8 - chevronSpace, 0);
++    QRectF textRect = rect.adjusted(10, 0, -8 - chevronSpace, 0);
++    if (orderIndex == 0 && m_nameTextX > textRect.left() && m_nameTextX < textRect.right()) {
++        textRect.setLeft(m_nameTextX); // line up with the file names
++    }
+     const QString text = QFontMetrics(font).elidedText(m_model->roleDescription(role), Qt::ElideRight, int(textRect.width()));
+     painter->drawText(textRect, Qt::AlignVCenter | Qt::AlignLeft, text);
+ 
+diff --git a/src/kitemviews/private/kitemlistheaderwidget.h b/src/kitemviews/private/kitemlistheaderwidget.h
+index 42dfda503..9c31cc8f8 100644
+--- a/src/kitemviews/private/kitemlistheaderwidget.h
++++ b/src/kitemviews/private/kitemlistheaderwidget.h
+@@ -52,6 +52,9 @@ public:
+     qreal offset() const;
+ 
+     void setSidePadding(qreal leftPaddingWidth, qreal rightPaddingWidth);
++
++    /** Finder: x where file names start, so the first column title lines up with them. */
++    void setNameTextX(qreal x);
+     qreal leftPadding() const;
+     qreal rightPadding() const;
+ 
+@@ -176,6 +179,7 @@ private:
+         int index;
+     };
+     MovingRole m_movingRole;
++    qreal m_nameTextX = -1;
+ };
+ 
+ #endif
+diff --git a/src/settings/dolphin_detailsmodesettings.kcfg b/src/settings/dolphin_detailsmodesettings.kcfg
+index acc2bd1ab..817486bdb 100644
+--- a/src/settings/dolphin_detailsmodesettings.kcfg
++++ b/src/settings/dolphin_detailsmodesettings.kcfg
+@@ -21,7 +21,7 @@
+         </entry>
+         <entry name="PreviewSize" type="Int">
+             <label>Preview size</label>
+-            <default code="true">KIconLoader::SizeLarge</default>
++            <default code="true">KIconLoader::SizeSmall</default> <!-- Finder: small icons in list view -->
+         </entry>
+         <entry name="ColumnPositions" type="IntList">
+             <label>Position of columns</label>
+diff --git a/src/views/viewproperties.cpp b/src/views/viewproperties.cpp
+index f461ebb89..c871c75d3 100644
+--- a/src/views/viewproperties.cpp
++++ b/src/views/viewproperties.cpp
+@@ -535,8 +535,10 @@ QList<QByteArray> ViewProperties::visibleRoles() const
+     const bool useDefaultValues = roles.count() == 1 // "text"
+         && (m_node->viewMode() == DolphinView::DetailsView) && !visibleRoles.contains(CustomizedDetailsString);
+     if (useDefaultValues) {
+-        roles.append("size");
++        // Finder's list columns: Date Modified, Size, Kind.
+         roles.append("modificationtime");
++        roles.append("size");
++        roles.append("type");
+     }
+ 
+     return roles;
+-- 
+2.56.0
+

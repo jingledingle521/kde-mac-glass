@@ -1,0 +1,16 @@
+[Wallpaper]
+defaultWallpaperTheme=WhiteSur-dark
+defaultFileSuffix=.png
+defaultHeight=2160
+defaultWidth=3840
+
+# Liquid glass: keep what's behind the panel vivid and only slightly lifted,
+# instead of washing it out.
+[ContrastEffect]
+enabled=true
+contrast=0.1
+intensity=1.12
+saturation=1.3
+
+[AdaptiveTransparency]
+enabled=true

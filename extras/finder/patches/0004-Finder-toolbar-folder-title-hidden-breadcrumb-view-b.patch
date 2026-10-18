@@ -1,0 +1,254 @@
+From 47ab26119c8a08188b9516c488bc51c3b847cc5c Mon Sep 17 00:00:00 2001
+From: Brhett <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 09:54:32 -0500
+Subject: [PATCH 04/30] Finder toolbar: folder title, hidden breadcrumb, view
+ buttons on the right
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ src/dolphinui.rc                          |   9 +-
+ src/finder/finderchrome.cpp               | 124 +++++++++++++++++++++-
+ src/finder/finderchrome.h                 |   8 ++
+ src/settings/dolphin_generalsettings.kcfg |   3 +-
+ 4 files changed, 137 insertions(+), 7 deletions(-)
+
+diff --git a/src/dolphinui.rc b/src/dolphinui.rc
+index 395436d74..8795db212 100644
+--- a/src/dolphinui.rc
++++ b/src/dolphinui.rc
+@@ -1,6 +1,6 @@
+ <?xml version="1.0"?>
+ <!DOCTYPE gui SYSTEM "kpartgui.dtd">
+-<gui name="dolphin" version="49">
++<gui name="dolphin" version="50">
+     <MenuBar>
+         <Menu name="file">
+             <Action name="new_menu" />
+@@ -110,12 +110,11 @@
+         <text context="@title:menu">Main Toolbar</text>
+         <Action name="go_back" />
+         <Action name="go_forward" />
+-        <Action name="view_settings" />
+         <Action name="url_navigators" />
+-        <Action name="split_view" />
+-        <Action name="split_stash" />
++        <Action name="icons" />
++        <Action name="compact" />
++        <Action name="details" />
+         <Action name="toggle_search" />
+-        <Action name="hamburger_menu" />
+     </ToolBar>
+     <ActionProperties scheme="Default">
+         <Action priority="0" name="go_back"/>
+diff --git a/src/finder/finderchrome.cpp b/src/finder/finderchrome.cpp
+index 1fce481b5..5e21cc2ce 100644
+--- a/src/finder/finderchrome.cpp
++++ b/src/finder/finderchrome.cpp
+@@ -6,12 +6,18 @@
+ 
+ #include "finderchrome.h"
+ 
++#include <KUrlComboBox>
++#include <KUrlNavigator>
++#include <QFocusEvent>
++#include <QLineEdit>
+ #include <KWindowEffects>
+ #include <KWindowShadow>
+ 
+ #include <QApplication>
+ #include <QGuiApplication>
+ #include <QHBoxLayout>
++#include <QLabel>
++#include <QToolButton>
+ #include <QMainWindow>
+ #include <QMouseEvent>
+ #include <QPainter>
+@@ -259,13 +265,108 @@ void FinderChrome::setToolBar(QToolBar *toolBar)
+     toolBar->installEventFilter(this);
+     // Let the window's own background (and rounded corners) show through.
+     toolBar->setAutoFillBackground(false);
+-    toolBar->setStyleSheet(QStringLiteral("QToolBar { background: transparent; border: none; }"));
++    toolBar->setStyleSheet(QStringLiteral("QToolBar { background: transparent; border: none; }"
++                                         "QToolButton::menu-indicator { image: none; width: 0; }"));
+     if (!m_stoplights) {
+         m_stoplights = new Stoplights(m_window);
+     }
+     // The stoplights lead the toolbar, like the title bar on macOS.
+     const QList<QAction *> actions = toolBar->actions();
+     toolBar->insertWidget(actions.isEmpty() ? nullptr : actions.first(), m_stoplights);
++
++    QAction *navigators = nullptr;
++    for (QAction *action : actions) {
++        const QString name = action->objectName();
++        if (name == QLatin1String("go_back") || name == QLatin1String("go_forward")) {
++            // Finder's back/forward have no menu arrow; holding shows history.
++            if (auto *button = qobject_cast<QToolButton *>(toolBar->widgetForAction(action))) {
++                button->setPopupMode(QToolButton::DelayedPopup);
++            }
++        } else if (name == QLatin1String("url_navigators")) {
++            navigators = action;
++        }
++    }
++    if (!navigators) {
++        return;
++    }
++
++    // The folder name as a bold title in place of the breadcrumb. The
++    // breadcrumb stays in the toolbar (hidden) so Dolphin doesn't move it
++    // above the view, and comes back while a path is being typed (Ctrl+L or
++    // a click on the title).
++    m_navigator = toolBar->widgetForAction(navigators);
++    m_navigatorAction = navigators;
++    auto *title = new QLabel(toolBar);
++    QFont font = title->font();
++    font.setWeight(QFont::Bold);
++    font.setPointSizeF(font.pointSizeF() * 1.08);
++    title->setFont(font);
++    title->setContentsMargins(10, 0, 10, 0);
++    title->setCursor(Qt::IBeamCursor);
++    title->installEventFilter(this);
++    m_title = title;
++    toolBar->insertWidget(navigators, title);
++
++    auto *spacer = new QWidget(toolBar);
++    spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
++    spacer->setAttribute(Qt::WA_TransparentForMouseEvents); // drags the window
++    const int next = actions.indexOf(navigators) + 1;
++    toolBar->insertWidget(next < actions.size() ? actions.at(next) : nullptr, spacer);
++
++    connect(m_window, &QWidget::windowTitleChanged, this, &FinderChrome::updateTitle, Qt::UniqueConnection);
++    updateTitle();
++    watchNavigators();
++}
++
++void FinderChrome::updateTitle()
++{
++    if (!m_title) {
++        return;
++    }
++    // Dolphin titles windows "Folder — App"; Finder shows just the folder.
++    QString text = m_window->windowTitle();
++    const int dash = text.lastIndexOf(QStringLiteral(" — "));
++    if (dash > 0) {
++        text = text.left(dash);
++    }
++    m_title->setText(text);
++}
++
++void FinderChrome::watchNavigators()
++{
++    if (!m_navigator) {
++        return;
++    }
++    for (KUrlNavigator *navigator : m_navigator->findChildren<KUrlNavigator *>()) {
++        connect(navigator, &KUrlNavigator::editableStateChanged, this, &FinderChrome::updateNavigatorVisibility, Qt::UniqueConnection);
++        // Typing a path is momentary: back to the title once it's entered.
++        connect(
++            navigator,
++            &KUrlNavigator::returnPressed,
++            navigator,
++            [navigator] {
++                navigator->setUrlEditable(false);
++            },
++            Qt::QueuedConnection);
++        navigator->editor()->lineEdit()->installEventFilter(this);
++    }
++    updateNavigatorVisibility();
++}
++
++void FinderChrome::updateNavigatorVisibility()
++{
++    if (!m_navigator || !m_title) {
++        return;
++    }
++    bool editing = false;
++    for (KUrlNavigator *navigator : m_navigator->findChildren<KUrlNavigator *>()) {
++        editing = editing || navigator->isUrlEditable();
++    }
++    // Hiding the action (not the widget) keeps Dolphin from re-showing it.
++    if (m_navigatorAction) {
++        m_navigatorAction->setVisible(editing);
++    }
++    m_title->setVisible(!editing);
+ }
+ 
+ void FinderChrome::setSidebar(QWidget *sidebar)
+@@ -391,6 +492,27 @@ bool FinderChrome::eventFilter(QObject *watched, QEvent *event)
+         return false;
+     }
+ 
++    if (watched == m_title && event->type() == QEvent::MouseButtonPress) {
++        // Click the title to type a path.
++        if (m_navigator) {
++            if (KUrlNavigator *navigator = m_navigator->findChild<KUrlNavigator *>()) {
++                navigator->setUrlEditable(true);
++                updateNavigatorVisibility();
++                navigator->setFocus();
++            }
++        }
++        return true;
++    }
++
++    if (event->type() == QEvent::FocusOut && m_navigator && m_navigator->isAncestorOf(qobject_cast<QWidget *>(watched))) {
++        auto *reason = static_cast<QFocusEvent *>(event);
++        if (reason->reason() != Qt::PopupFocusReason) { // completion popups keep editing
++            for (KUrlNavigator *navigator : m_navigator->findChildren<KUrlNavigator *>()) {
++                navigator->setUrlEditable(false);
++            }
++        }
++    }
++
+     if (watched == m_toolBar) {
+         if (event->type() == QEvent::Paint) {
+             // Paint this strip of the window background ourselves (a
+diff --git a/src/finder/finderchrome.h b/src/finder/finderchrome.h
+index de244eb20..be441db16 100644
+--- a/src/finder/finderchrome.h
++++ b/src/finder/finderchrome.h
+@@ -12,6 +12,8 @@
+ 
+ class KWindowShadow;
+ class QMainWindow;
++class QAction;
++class QLabel;
+ class QToolBar;
+ class QWidget;
+ 
+@@ -43,6 +45,9 @@ protected:
+ 
+ private:
+     void paintBackground();
++    void updateTitle();
++    void watchNavigators();
++    void updateNavigatorVisibility();
+     void updateWindowEffects();
+     void updateShadow();
+     Qt::Edges edgesAt(const QPointF &pos) const;
+@@ -53,6 +58,9 @@ private:
+     QPointer<QToolBar> m_toolBar;
+     QPointer<QWidget> m_sidebar;
+     QPointer<QWidget> m_stoplights;
++    QPointer<QLabel> m_title;
++    QPointer<QWidget> m_navigator; // the hidden breadcrumb
++    QPointer<QAction> m_navigatorAction;
+     KWindowShadow *m_shadow = nullptr;
+     Qt::Edges m_cursorEdges;
+ };
+diff --git a/src/settings/dolphin_generalsettings.kcfg b/src/settings/dolphin_generalsettings.kcfg
+index 40ee1deaf..7a849d4c6 100644
+--- a/src/settings/dolphin_generalsettings.kcfg
++++ b/src/settings/dolphin_generalsettings.kcfg
+@@ -146,7 +146,8 @@
+                 <choice name="Disabled" />
+             </choices>
+             <label>Statusbar</label>
+-            <default>0</default>
++            <!-- Finder: Golden Gate shows no status line by default. -->
++            <default>2</default>
+             <emit signal="showStatusBarChanged" />
+         </entry>
+         <entry name="ShowZoomSlider" type="Bool">
+-- 
+2.56.0
+

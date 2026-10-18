@@ -1,0 +1,16 @@
+{
+    "KPackageStructure": "Plasma/Shell",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "Brhett"
+            }
+        ],
+        "Description": "macOS-style Golden Gate lock screen",
+        "Id": "org.brhett.goldengate",
+        "License": "GPL-2.0+",
+        "Name": "Golden Gate Lock Screen",
+        "Version": "1.0"
+    },
+    "X-Plasma-APIVersion": "2"
+}

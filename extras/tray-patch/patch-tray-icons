@@ -1,0 +1,235 @@
+#!/usr/bin/python3 -I
+"""Build a copy of Plasma's system tray applet with macOS-style icons.
+
+1. 16px icons instead of 22px: the tray hard-codes iconSizes.smallMedium in
+   main.qml (zstd-compressed in the plugin); patch it to iconSizes.small.
+2. Monochrome app icons: StatusNotifierItem.qml (stored uncompressed) gets a
+   desaturate layer effect so app tray icons are grey like macOS
+   menu bar extras. (A plain mask turns apps that send opaque pixmaps into
+   white squares.) Uncompressed resources cannot grow, so the licence
+   comment is dropped to make room.
+3. Windows-style overflow: the hidden-icons popup becomes a compact grid of
+   icons only (no labels, no header) sized to its contents; it returns to the
+   normal size when a hidden applet's own popup is shown.
+4. Overflow arrow: stock main.qml shows it based on the popup's grid, which
+   only exists once a hidden *applet* forces the popup to be built, so with
+   only hidden app icons the arrow never appeared. Count the hidden
+   instantiator's rows instead (the proxy model's own count goes stale).
+In every case the AOT-compiled unit's lookup path is renamed so Qt compiles
+the patched source instead of the precompiled original.
+
+The copy goes to ~/.local/lib64/qt6/plugins (loaded first via QT_PLUGIN_PATH,
+see ~/.config/systemd/user/plasma-plasmashell.service.d/small-tray-icons.conf).
+Runs before every plasmashell start; re-patches only when the system plugin
+changed, and removes the copy on failure so Plasma falls back to the stock tray.
+"""
+import hashlib
+import os
+import shutil
+import struct
+import subprocess
+import sys
+
+SRC = '/usr/lib64/qt6/plugins/plasma/applets/org.kde.plasma.systemtray.so'
+DST = os.path.expanduser('~/.local/lib64/qt6/plugins/plasma/applets/org.kde.plasma.systemtray.so')
+STAMP = DST + '.source-sha256'
+OLD = b'readonly property int smallIconSize: Kirigami.Units.iconSizes.smallMedium\n'
+NEW = b'readonly property int smallIconSize: Kirigami.Units.iconSizes.small\n'
+URL = '/systemtray/main.qml'.encode('utf-16-le')
+URL_PATCHED = '/systemtray/Main.qml'.encode('utf-16-le')
+ARROW_OLD = b'visible: root.hiddenLayout.itemCount > 0'
+ARROW_NEW = b'visible: hiddenInstantiator.count > 0'
+VERSION = '8'  # bump when the patch changes so existing copies are rebuilt
+
+SNI_ANCHOR = b'AbstractItem {\n    id: taskIcon\n\n    itemId: model?.Id'
+SNI_OLD = b'        active: taskIcon.containsMouse\n    }\n'
+SNI_NEW = b'        active: taskIcon.containsMouse\n        layer { enabled: true; effect: MultiEffect { saturation: -1 } }\n    }\n'
+SNI_IMPORT_OLD = b'import QtQuick\n'
+SNI_IMPORT_NEW = b'import QtQuick\nimport QtQuick.Effects\n'
+SNI_URL = '/systemtray/StatusNotifierItem.qml'.encode('utf-16-le')
+SNI_URL_PATCHED = '/systemtray/statusNotifierItem.qml'.encode('utf-16-le')
+
+
+def zstd(args, data):
+    return subprocess.run(['zstd', *args], input=data, capture_output=True, check=True).stdout
+
+
+def patch(d):
+    i = 0
+    while (i := d.find(b'\x28\xb5\x2f\xfd', i + 1)) >= 0:
+        length = struct.unpack('>I', d[i - 4:i])[0]
+        try:
+            src = zstd(['-dc'], bytes(d[i:i + length]))
+        except subprocess.CalledProcessError:
+            continue
+        if OLD not in src:
+            continue
+        if src.count(ARROW_OLD) != 1:
+            sys.exit('overflow arrow visibility not found')
+        new = src.replace(OLD, NEW, 1).replace(ARROW_OLD, ARROW_NEW, 1)
+        frame = zstd(['-19', '-c', '--no-check', f'--stream-size={len(new)}'], new)
+        if len(frame) > length:
+            sys.exit('patched main.qml does not fit')
+        d[i:i + length] = frame + b'\0' * (length - len(frame))
+        d[i - 4:i] = struct.pack('>I', len(frame))
+        break
+    else:
+        sys.exit('main.qml with smallMedium icon size not found')
+    if d.count(URL) != 1:
+        sys.exit('AOT unit path not found')
+    j = d.find(URL)
+    d[j:j + len(URL)] = URL_PATCHED
+    patch_monochrome(d)
+    patch_overflow(d)
+
+
+# (anchor that identifies the file, [(old, new), ...], AOT path) for the
+# overflow popup. Plain files are stored uncompressed and may not grow.
+OVERFLOW_PLAIN = [
+    (b'PlasmaComponents3.ScrollView {\n    id: hiddenTasksView', [
+        (b'readonly property int columns: 2', b'readonly property int columns: 5'),
+        (b'readonly property int delegateHeight: (metrics.height * delegateMaxTextLines) + (delegateMargins * 2)',
+         b'readonly property int delegateHeight: Kirigami.Units.iconSizes.medium + delegateMargins * 4'),
+        (b'cellWidth: Math.floor(hiddenTasksView.availableWidth / columns)', b'cellWidth: delegateHeight'),
+    ], '/systemtray/HiddenItemsView.qml'),
+    (b'readonly property bool inVisibleLayout: effectiveStatus === PlasmaCore.Types.ActiveStatus', [
+        (b'visible: abstractItem.inHiddenLayout', b'visible: false'),
+    ], '/systemtray/AbstractItem.qml'),
+]
+EXPANDED_ANCHOR = b'property alias hiddenLayout: hiddenItemsView.layout'
+EXPANDED_EDITS = [
+    (b'    Layout.minimumWidth: Kirigami.Units.gridUnit * 24\n    Layout.minimumHeight: Kirigami.Units.gridUnit * 24\n',
+     b'    readonly property int gridCount: Math.max(1, hiddenItemsView.layout.count)\n'
+     b'    Layout.minimumWidth: systemTrayState.activeApplet ? Kirigami.Units.gridUnit * 24 : hiddenItemsView.layout.cellWidth * Math.min(5, gridCount) + Kirigami.Units.gridUnit\n'
+     b'    Layout.minimumHeight: systemTrayState.activeApplet ? Kirigami.Units.gridUnit * 24 : hiddenItemsView.layout.cellHeight * Math.ceil(gridCount / 5) + Kirigami.Units.smallSpacing * 4\n'
+     b'    Layout.maximumWidth: systemTrayState.activeApplet ? -1 : Layout.minimumWidth\n'
+     b'    Layout.maximumHeight: systemTrayState.activeApplet ? -1 : Layout.minimumHeight\n'),
+    (b'        id: plasmoidHeading\n', b'        id: plasmoidHeading\n        visible: !!systemTrayState.activeApplet\n'),
+    (b'            id: trayHeading\n', b'            id: trayHeading\n            visible: !!systemTrayState.activeApplet\n'),
+    (b'            Layout.topMargin: Kirigami.Units.smallSpacing\n            visible: !systemTrayState.activeApplet\n',
+     b'            Layout.topMargin: 0\n            visible: !systemTrayState.activeApplet\n'),
+]
+EXPANDED_URL = '/systemtray/ExpandedRepresentation.qml'
+
+
+def rename_aot(d, path):
+    url = path.encode('utf-16-le')
+    if d.count(url) != 1:
+        sys.exit(f'AOT unit path not found: {path}')
+    head, name = path.rsplit('/', 1)
+    patched = (head + '/' + name[0].lower() + name[1:]).encode('utf-16-le')
+    j = d.find(url)
+    d[j:j + len(url)] = patched
+
+
+def patch_plain(d, anchor, edits):
+    if d.count(anchor) != 1:
+        sys.exit(f'resource not found: {anchor[:40]!r}')
+    pos = d.find(anchor)
+    # Files start with their licence header; inline /* */ comments also exist.
+    start = d.rfind(b'/*\n    SPDX-FileCopyrightText', 0, pos)
+    length = struct.unpack('>I', d[start - 4:start])[0]
+    if start < 0 or not start < pos < start + length:
+        sys.exit('resource bounds look wrong')
+    src = bytes(d[start:start + length])
+    new = src[src.index(b'*/\n') + 3:]  # drop licence comment to make room
+    for old, rep_ in edits:
+        if new.count(old) != 1:
+            sys.exit(f'edit target not found: {old[:50]!r}')
+        new = new.replace(old, rep_, 1)
+    if len(new) > length:
+        sys.exit('patched resource does not fit')
+    d[start:start + length] = new + b' ' * (length - len(new))
+
+
+def patch_compressed(d, anchor, edits):
+    i = 0
+    while (i := d.find(b'\x28\xb5\x2f\xfd', i + 1)) >= 0:
+        length = struct.unpack('>I', d[i - 4:i])[0]
+        try:
+            src = zstd(['-dc'], bytes(d[i:i + length]))
+        except subprocess.CalledProcessError:
+            continue
+        if anchor not in src:
+            continue
+        for old, rep_ in edits:
+            if src.count(old) != 1:
+                sys.exit(f'edit target not found: {old[:50]!r}')
+            src = src.replace(old, rep_, 1)
+        # Make room: drop the licence header and comment-only lines.
+        if src.startswith(b'/*'):
+            src = src[src.index(b'*/\n') + 3:]
+        src = b'\n'.join(l for l in src.split(b'\n') if not l.lstrip().startswith(b'//'))
+        frame = zstd(['--ultra', '-22', '-c', '--no-check', f'--stream-size={len(src)}'], src)
+        if len(frame) > length:
+            sys.exit('patched compressed resource does not fit')
+        d[i:i + length] = frame + b'\0' * (length - len(frame))
+        d[i - 4:i] = struct.pack('>I', len(frame))
+        return
+    sys.exit(f'compressed resource not found: {anchor[:40]!r}')
+
+
+def patch_overflow(d):
+    for anchor, edits, path in OVERFLOW_PLAIN:
+        patch_plain(d, anchor, edits)
+        rename_aot(d, path)
+    patch_compressed(d, EXPANDED_ANCHOR, EXPANDED_EDITS)
+    rename_aot(d, EXPANDED_URL)
+
+
+def patch_monochrome(d):
+    if d.count(SNI_ANCHOR) != 1:
+        sys.exit('StatusNotifierItem.qml not found')
+    anchor = d.find(SNI_ANCHOR)
+    start = d.rfind(b'/*', 0, anchor)
+    length = struct.unpack('>I', d[start - 4:start])[0]
+    if not start < anchor < start + length:
+        sys.exit('StatusNotifierItem.qml resource bounds look wrong')
+    src = bytes(d[start:start + length])
+    comment_end = src.index(b'*/\n') + 3
+    new = src[comment_end:]
+    if new.count(SNI_OLD) != 1:
+        sys.exit('StatusNotifierItem.qml icon block not found')
+    new = new.replace(SNI_OLD, SNI_NEW, 1).replace(SNI_IMPORT_OLD, SNI_IMPORT_NEW, 1)
+    if len(new) > length:
+        sys.exit('patched StatusNotifierItem.qml does not fit')
+    d[start:start + length] = new + b' ' * (length - len(new))
+    if d.count(SNI_URL) != 1:
+        sys.exit('StatusNotifierItem AOT unit path not found')
+    j = d.find(SNI_URL)
+    d[j:j + len(SNI_URL)] = SNI_URL_PATCHED
+
+
+def main():
+    data = open(SRC, 'rb').read()
+    digest = hashlib.sha256(data).hexdigest()
+    try:
+        if open(STAMP).read().strip() == f'{digest}:{VERSION}' and os.path.exists(DST):
+            return
+    except FileNotFoundError:
+        pass
+    os.makedirs(os.path.dirname(DST), exist_ok=True)
+    d = bytearray(data)
+    try:
+        patch(d)
+    except BaseException:
+        for f in (DST, STAMP):
+            if os.path.exists(f):
+                os.remove(f)
+        raise
+    # Write beside the target and swap it in atomically: truncating the .so
+    # that a running plasmashell has mapped would crash it.
+    tmp = DST + '.tmp'
+    with open(tmp, 'wb') as f:
+        f.write(d)
+    os.chmod(tmp, 0o755)
+    os.replace(tmp, DST)
+    open(STAMP, 'w').write(f'{digest}:{VERSION}\n')
+    # Compiled-in resources keep the plugin's build timestamp, so Qt's disk
+    # cache would keep serving the previously compiled QML. Drop it.
+    shutil.rmtree(os.path.expanduser('~/.cache/plasmashell/qmlcache'), ignore_errors=True)
+    print('patched', DST)
+
+
+if __name__ == '__main__':
+    main()

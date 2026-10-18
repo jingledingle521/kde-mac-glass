@@ -1,0 +1,59 @@
+From 0c4d170e0d202dc30dd5ae76d1843a98b6cc3779 Mon Sep 17 00:00:00 2001
+From: Brhett <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 14:26:13 -0500
+Subject: [PATCH 24/30] Finder: Recents and Downloads as plain lists; columns
+ at least as wide as their titles
+
+Dolphin groups Recents and Downloads by date, which made them look unlike
+every other folder (no stripes, group titles). They are plain lists now,
+newest first. Column minimum widths are measured in the Finder header's
+semibold font with its padding and sort chevron, so titles like "Date Last
+Opened" aren't cut off.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ src/kitemviews/kitemlistview.cpp | 10 ++++++----
+ src/views/viewproperties.cpp     |  3 ++-
+ 2 files changed, 8 insertions(+), 5 deletions(-)
+
+diff --git a/src/kitemviews/kitemlistview.cpp b/src/kitemviews/kitemlistview.cpp
+index a1310d6a5..7fa2c7856 100644
+--- a/src/kitemviews/kitemlistview.cpp
++++ b/src/kitemviews/kitemlistview.cpp
+@@ -2430,12 +2430,14 @@ QHash<QByteArray, qreal> KItemListView::preferredColumnWidths(const KItemRangeLi
+ 
+     // Calculate the minimum width for each column that is required
+     // to show the headline unclipped.
+-    const QFontMetricsF fontMetrics(m_headerWidget->font());
+-    const int gripMargin = m_headerWidget->style()->pixelMetric(QStyle::PM_HeaderGripMargin);
+-    const int headerMargin = m_headerWidget->style()->pixelMetric(QStyle::PM_HeaderMargin);
++    // Finder: titles are drawn semibold, with 10 px before, 8 px after and room
++    // for the sort chevron (see KItemListHeaderWidget::paintRole()).
++    QFont bold = m_headerWidget->font();
++    bold.setWeight(QFont::DemiBold);
++    const QFontMetricsF fontMetrics(bold);
+     for (const QByteArray &visibleRole : std::as_const(m_visibleRoles)) {
+         const QString headerText = m_model->roleDescription(visibleRole);
+-        const qreal headerWidth = fontMetrics.horizontalAdvance(headerText) + gripMargin + headerMargin * 2;
++        const qreal headerWidth = fontMetrics.horizontalAdvance(headerText) + 10 + 8 + 18 + 12; // + slack for rounding
+         widths.insert(visibleRole, headerWidth);
+     }
+ 
+diff --git a/src/views/viewproperties.cpp b/src/views/viewproperties.cpp
+index ab6a57225..01e72f0dc 100644
+--- a/src/views/viewproperties.cpp
++++ b/src/views/viewproperties.cpp
+@@ -261,7 +261,8 @@ ViewProperties::ViewProperties(const QUrl &url)
+         } else if (useRecentDocumentsView || useDownloadsView) {
+             setSortOrder(Qt::DescendingOrder);
+             setSortFoldersFirst(false);
+-            setGroupedSorting(true);
++            // Finder: a plain list like every other folder (newest first), not grouped by date.
++            setGroupedSorting(false);
+ 
+             if (useRecentDocumentsView) {
+                 setSortRole(QByteArrayLiteral("accesstime"));
+-- 
+2.56.0
+

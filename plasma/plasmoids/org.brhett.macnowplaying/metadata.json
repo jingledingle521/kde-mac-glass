@@ -1,0 +1,18 @@
+{
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "Brhett"
+            }
+        ],
+        "Category": "System Information",
+        "Description": "macOS-style Now Playing menu with artwork, progress and controls",
+        "Icon": "media-playback-playing",
+        "Id": "org.brhett.macnowplaying",
+        "License": "GPL-2.0+",
+        "Name": "Mac Now Playing",
+        "Version": "1.0"
+    },
+    "KPackageStructure": "Plasma/Applet",
+    "X-Plasma-API-Minimum-Version": "6.0"
+}

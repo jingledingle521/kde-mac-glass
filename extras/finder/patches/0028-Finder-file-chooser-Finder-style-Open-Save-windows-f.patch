@@ -1,0 +1,1080 @@
+From 82b731fd64f107c90d04f7062a18d7bf5fac360b Mon Sep 17 00:00:00 2001
+From: Brhett <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 15:18:37 -0500
+Subject: [PATCH 28/30] Finder file chooser: Finder-style Open/Save windows for
+ xdg-desktop-portal
+
+finder-filechooser implements org.freedesktop.impl.portal.FileChooser
+(OpenFile, SaveFile, SaveFiles) with a window built from Finder's own
+parts: its chrome (rounded, stoplights, glass sidebar, capsule toolbar,
+folder title over a hidden path field), its sidebar, and Dolphin's view
+with Finder's list and icon styling, plus Save As, file-type filters and
+Cancel / Open along the bottom. Requests can be cancelled through the
+portal's Request object. finder-extras/install.sh registers it (D-Bus
+service, kde-portals.conf, and finder.portal in the system portal folder).
+
+The window chrome now leaves column view, AirDrop and transfer cards to
+Finder's own window, and the sidebar can hide AirDrop.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ finder-extras/finder.portal                   |   3 +
+ finder-extras/install.sh                      |  21 +
+ finder-extras/kde-portals.conf                |   8 +
+ ...desktop.impl.portal.desktop.finder.service |   3 +
+ src/CMakeLists.txt                            |  13 +
+ src/finder/filechooser/filechooserportal.cpp  | 209 ++++++++++
+ src/finder/filechooser/filechooserportal.h    |  86 ++++
+ src/finder/filechooser/finderfiledialog.cpp   | 386 ++++++++++++++++++
+ src/finder/filechooser/finderfiledialog.h     |  96 +++++
+ src/finder/filechooser/main.cpp               |  53 +++
+ src/finder/finderchrome.cpp                   |  10 +
+ src/finder/findersidebar.cpp                  |  18 +-
+ src/finder/findersidebar.h                    |   4 +
+ 13 files changed, 906 insertions(+), 4 deletions(-)
+ create mode 100644 finder-extras/finder.portal
+ create mode 100644 finder-extras/kde-portals.conf
+ create mode 100644 finder-extras/org.freedesktop.impl.portal.desktop.finder.service
+ create mode 100644 src/finder/filechooser/filechooserportal.cpp
+ create mode 100644 src/finder/filechooser/filechooserportal.h
+ create mode 100644 src/finder/filechooser/finderfiledialog.cpp
+ create mode 100644 src/finder/filechooser/finderfiledialog.h
+ create mode 100644 src/finder/filechooser/main.cpp
+
+diff --git a/finder-extras/finder.portal b/finder-extras/finder.portal
+new file mode 100644
+index 000000000..5480dfbf0
+--- /dev/null
++++ b/finder-extras/finder.portal
+@@ -0,0 +1,3 @@
++[portal]
++DBusName=org.freedesktop.impl.portal.desktop.finder
++Interfaces=org.freedesktop.impl.portal.FileChooser;
+diff --git a/finder-extras/install.sh b/finder-extras/install.sh
+index 11a0f78e2..5415b95d7 100755
+--- a/finder-extras/install.sh
++++ b/finder-extras/install.sh
+@@ -32,5 +32,26 @@ ninja -C "$root/build" install
+ mkdir -p "$apps"
+ sed "s|@PREFIX@|$prefix|" "$root/finder-extras/org.brhett.finder.desktop" > "$apps/org.brhett.finder.desktop"
+ update-desktop-database "$apps" 2>/dev/null || true
++
++# Finder's Open/Save windows for other apps, through xdg-desktop-portal.
++config=${XDG_CONFIG_HOME:-$HOME/.config}
++services=${XDG_DATA_HOME:-$HOME/.local/share}/dbus-1/services
++mkdir -p "$services" "$config/xdg-desktop-portal"
++sed "s|@PREFIX@|$prefix|" "$root/finder-extras/org.freedesktop.impl.portal.desktop.finder.service" \
++    > "$services/org.freedesktop.impl.portal.desktop.finder.service"
++if [ -f "$config/xdg-desktop-portal/kde-portals.conf" ]; then
++    grep -q 'FileChooser=finder' "$config/xdg-desktop-portal/kde-portals.conf" \
++        || echo "Add org.freedesktop.impl.portal.FileChooser=finder;kde under [preferred] in $config/xdg-desktop-portal/kde-portals.conf"
++else
++    cp "$root/finder-extras/kde-portals.conf" "$config/xdg-desktop-portal/kde-portals.conf"
++fi
++# xdg-desktop-portal only reads backend descriptions from its system folder.
++portal=/usr/share/xdg-desktop-portal/portals/finder.portal
++if ! cmp -s "$root/finder-extras/finder.portal" "$portal"; then
++    pkexec install -m 644 "$root/finder-extras/finder.portal" "$portal" \
++        || echo "Skipped the Finder file chooser: $portal needs installing as root."
++fi
++systemctl --user restart xdg-desktop-portal.service 2>/dev/null || true
++
+ echo "Finder installed. Launch it from the app menu, or: $prefix/bin/finder"
+ echo "For AirDrop, run finder-extras/install-airdrop."
+diff --git a/finder-extras/kde-portals.conf b/finder-extras/kde-portals.conf
+new file mode 100644
+index 000000000..f261f572a
+--- /dev/null
++++ b/finder-extras/kde-portals.conf
+@@ -0,0 +1,8 @@
++# Plasma's portal choices, with Finder's Open/Save windows for file choosing
++# (KDE's own dialog stays as the fallback).
++[preferred]
++default=kde
++org.freedesktop.impl.portal.Settings=kde;gtk;
++org.freedesktop.impl.portal.Secret=kwallet
++org.freedesktop.impl.portal.Notification=plasmanotify
++org.freedesktop.impl.portal.FileChooser=finder;kde
+diff --git a/finder-extras/org.freedesktop.impl.portal.desktop.finder.service b/finder-extras/org.freedesktop.impl.portal.desktop.finder.service
+new file mode 100644
+index 000000000..732746786
+--- /dev/null
++++ b/finder-extras/org.freedesktop.impl.portal.desktop.finder.service
+@@ -0,0 +1,3 @@
++[D-BUS Service]
++Name=org.freedesktop.impl.portal.desktop.finder
++Exec=@PREFIX@/bin/finder-filechooser
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 29ac17483..2e3ddc895 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -564,6 +564,19 @@ generate_and_install_dbus_interface(
+ 
+ install(TARGETS dolphin ${KDE_INSTALL_TARGETS_DEFAULT_ARGS})
+ 
++# Finder's Open/Save windows for xdg-desktop-portal (see finder-extras/install.sh).
++add_executable(finder-filechooser
++    finder/filechooser/main.cpp
++    finder/filechooser/filechooserportal.cpp
++    finder/filechooser/finderfiledialog.cpp
++)
++target_link_libraries(finder-filechooser
++    PRIVATE
++    dolphinprivate
++    dolphinstatic
++)
++install(TARGETS finder-filechooser ${KDE_INSTALL_TARGETS_DEFAULT_ARGS})
++
+ ##########################################
+ 
+ if(NOT WIN32)
+diff --git a/src/finder/filechooser/filechooserportal.cpp b/src/finder/filechooser/filechooserportal.cpp
+new file mode 100644
+index 000000000..7d501e986
+--- /dev/null
++++ b/src/finder/filechooser/filechooserportal.cpp
+@@ -0,0 +1,209 @@
++/*
++ * SPDX-FileCopyrightText: 2026 Brhett
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "filechooserportal.h"
++#include "finderfiledialog.h"
++
++#include <KLocalizedString>
++
++#include <QDBusArgument>
++#include <QDBusConnection>
++#include <QDBusMessage>
++#include <QDBusMetaType>
++#include <QDir>
++#include <QFile>
++#include <QFileInfo>
++
++QDBusArgument &operator<<(QDBusArgument &arg, const PortalFilterRule &rule)
++{
++    arg.beginStructure();
++    arg << rule.type << rule.pattern;
++    arg.endStructure();
++    return arg;
++}
++
++const QDBusArgument &operator>>(const QDBusArgument &arg, PortalFilterRule &rule)
++{
++    arg.beginStructure();
++    arg >> rule.type >> rule.pattern;
++    arg.endStructure();
++    return arg;
++}
++
++QDBusArgument &operator<<(QDBusArgument &arg, const PortalFilter &filter)
++{
++    arg.beginStructure();
++    arg << filter.name << filter.rules;
++    arg.endStructure();
++    return arg;
++}
++
++const QDBusArgument &operator>>(const QDBusArgument &arg, PortalFilter &filter)
++{
++    arg.beginStructure();
++    arg >> filter.name >> filter.rules;
++    arg.endStructure();
++    return arg;
++}
++
++namespace
++{
++// Portal response codes.
++constexpr uint Success = 0;
++constexpr uint Cancelled = 1;
++
++/** The Request object xdg-desktop-portal uses to cancel a pending dialog. */
++class PortalRequest : public QObject
++{
++    Q_OBJECT
++    Q_CLASSINFO("D-Bus Interface", "org.freedesktop.impl.portal.Request")
++
++public:
++    using QObject::QObject;
++
++public Q_SLOTS:
++    void Close()
++    {
++        Q_EMIT closeRequested();
++    }
++
++Q_SIGNALS:
++    void closeRequested();
++};
++
++/** Byte-array paths ("ay", NUL-terminated) as the portal sends them. */
++QString bytesPath(const QVariant &value)
++{
++    // Arrives wrapped in a QDBusArgument when read from an a{sv}.
++    QByteArray bytes = value.userType() == qMetaTypeId<QDBusArgument>() ? qdbus_cast<QByteArray>(value.value<QDBusArgument>()) : value.toByteArray();
++    while (bytes.endsWith('\0')) {
++        bytes.chop(1);
++    }
++    return QFile::decodeName(bytes);
++}
++}
++
++FileChooserPortal::FileChooserPortal(QObject *parent)
++    : QObject(parent)
++{
++    qDBusRegisterMetaType<PortalFilterRule>();
++    qDBusRegisterMetaType<PortalFilterRules>();
++    qDBusRegisterMetaType<PortalFilter>();
++    qDBusRegisterMetaType<PortalFilterList>();
++}
++
++int FileChooserPortal::openRequests() const
++{
++    return m_open;
++}
++
++uint FileChooserPortal::OpenFile(const QDBusObjectPath &handle, const QString &, const QString &, const QString &title, const QVariantMap &options, QVariantMap &)
++{
++    request(Kind::Open, handle, title, options);
++    return 0; // the real answer is sent when the dialog closes
++}
++
++uint FileChooserPortal::SaveFile(const QDBusObjectPath &handle, const QString &, const QString &, const QString &title, const QVariantMap &options, QVariantMap &)
++{
++    request(Kind::Save, handle, title, options);
++    return 0;
++}
++
++uint FileChooserPortal::SaveFiles(const QDBusObjectPath &handle, const QString &, const QString &, const QString &title, const QVariantMap &options, QVariantMap &)
++{
++    request(Kind::SaveFiles, handle, title, options);
++    return 0;
++}
++
++void FileChooserPortal::request(Kind kind, const QDBusObjectPath &handle, const QString &title, const QVariantMap &options)
++{
++    FinderFileDialog::Options o;
++    o.mode = kind == Kind::Open ? FinderFileDialog::Open : FinderFileDialog::Save;
++    o.title = title;
++    o.acceptLabel = options.value(QStringLiteral("accept_label")).toString();
++    o.multiple = kind == Kind::Open && options.value(QStringLiteral("multiple")).toBool();
++    // SaveFiles saves several files into one folder the user picks.
++    o.directory = options.value(QStringLiteral("directory")).toBool() || kind == Kind::SaveFiles;
++    if (kind == Kind::SaveFiles) {
++        o.mode = FinderFileDialog::Open;
++        if (o.acceptLabel.isEmpty()) {
++            o.acceptLabel = i18nc("@action:button Finder file chooser", "Save Here");
++        }
++    }
++    if (options.contains(QStringLiteral("filters"))) {
++        o.filters = qdbus_cast<PortalFilterList>(options.value(QStringLiteral("filters")).value<QDBusArgument>());
++    }
++    if (options.contains(QStringLiteral("current_filter"))) {
++        const PortalFilter current = qdbus_cast<PortalFilter>(options.value(QStringLiteral("current_filter")).value<QDBusArgument>());
++        for (int i = 0; i < o.filters.size(); ++i) {
++            if (o.filters.at(i).name == current.name) {
++                o.currentFilter = i;
++            }
++        }
++        if (o.filters.isEmpty() && !current.rules.isEmpty()) {
++            o.filters = {current};
++            o.currentFilter = 0;
++        }
++    }
++    o.currentName = options.value(QStringLiteral("current_name")).toString();
++    QString folder = bytesPath(options.value(QStringLiteral("current_folder")));
++
++    const QString file = bytesPath(options.value(QStringLiteral("current_file")));
++    if (!file.isEmpty()) {
++        folder = QFileInfo(file).absolutePath();
++        if (o.currentName.isEmpty()) {
++            o.currentName = QFileInfo(file).fileName();
++        }
++    }
++    o.folder = QUrl::fromLocalFile(folder.isEmpty() || !QDir(folder).exists() ? QDir::homePath() : folder);
++    QStringList saveNames; // SaveFiles: the names to save into the chosen folder
++    if (kind == Kind::SaveFiles) {
++        for (const QByteArray &name : qdbus_cast<QList<QByteArray>>(options.value(QStringLiteral("files")).value<QDBusArgument>())) {
++            saveNames.append(bytesPath(name));
++        }
++    }
++
++    // The answer goes out when the dialog closes.
++    setDelayedReply(true);
++    const QDBusMessage message = this->message();
++
++    auto *dialog = new FinderFileDialog(o);
++    auto *request = new PortalRequest(dialog);
++    QDBusConnection::sessionBus().registerObject(handle.path(), request, QDBusConnection::ExportAllSlots);
++    connect(request, &PortalRequest::closeRequested, dialog, &FinderFileDialog::cancel);
++    ++m_open;
++
++    connect(dialog, &FinderFileDialog::finished, this, [this, dialog, message, handle, kind, saveNames](bool accepted, const QList<QUrl> &urls, int filter) {
++        QDBusConnection::sessionBus().unregisterObject(handle.path());
++        QVariantMap results;
++        if (accepted) {
++            QStringList uris;
++            if (kind == Kind::SaveFiles) {
++                const QUrl folder = urls.value(0);
++                for (const QString &name : saveNames) {
++                    uris.append(QUrl::fromLocalFile(QDir(folder.toLocalFile()).filePath(name)).toString());
++                }
++            } else {
++                for (const QUrl &url : urls) {
++                    uris.append(url.toString());
++                }
++            }
++            results.insert(QStringLiteral("uris"), uris);
++            if (filter >= 0 && filter < dialog->options().filters.size()) {
++                results.insert(QStringLiteral("current_filter"), QVariant::fromValue(dialog->options().filters.at(filter)));
++            }
++        }
++        QDBusConnection::sessionBus().send(message.createReply({QVariant::fromValue(accepted ? Success : Cancelled), QVariant::fromValue(results)}));
++        dialog->deleteLater();
++        if (--m_open == 0) {
++            Q_EMIT idle();
++        }
++    });
++    dialog->present();
++}
++
++#include "filechooserportal.moc"
++#include "moc_filechooserportal.cpp"
+diff --git a/src/finder/filechooser/filechooserportal.h b/src/finder/filechooser/filechooserportal.h
+new file mode 100644
+index 000000000..07ee4d1c1
+--- /dev/null
++++ b/src/finder/filechooser/filechooserportal.h
+@@ -0,0 +1,86 @@
++/*
++ * SPDX-FileCopyrightText: 2026 Brhett
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef FILECHOOSERPORTAL_H
++#define FILECHOOSERPORTAL_H
++
++#include <QDBusContext>
++#include <QDBusObjectPath>
++#include <QObject>
++#include <QVariantMap>
++
++/** One rule of a portal file filter: type 0 is a glob ("*.png"), 1 a MIME type. */
++struct PortalFilterRule {
++    uint type = 0;
++    QString pattern;
++};
++using PortalFilterRules = QList<PortalFilterRule>;
++
++/** A named portal file filter ("Images": *.png, image/jpeg…), D-Bus type (sa(us)). */
++struct PortalFilter {
++    QString name;
++    PortalFilterRules rules;
++};
++using PortalFilterList = QList<PortalFilter>;
++
++Q_DECLARE_METATYPE(PortalFilterRule)
++Q_DECLARE_METATYPE(PortalFilter)
++
++/**
++ * @brief Finder's file chooser for xdg-desktop-portal
++ * (org.freedesktop.impl.portal.FileChooser).
++ *
++ * Apps that ask the desktop for an Open or Save dialog (browsers, Flatpak and
++ * Snap apps, Electron apps…) get a Finder-style window. Each request is
++ * answered when its window closes; xdg-desktop-portal can cancel it through
++ * the org.freedesktop.impl.portal.Request object at the request's handle.
++ */
++class FileChooserPortal : public QObject, protected QDBusContext
++{
++    Q_OBJECT
++    Q_CLASSINFO("D-Bus Interface", "org.freedesktop.impl.portal.FileChooser")
++
++public:
++    explicit FileChooserPortal(QObject *parent = nullptr);
++
++    /** Requests (dialogs) still open; the service quits when idle for a while. */
++    int openRequests() const;
++
++public Q_SLOTS:
++    uint OpenFile(const QDBusObjectPath &handle,
++                  const QString &app_id,
++                  const QString &parent_window,
++                  const QString &title,
++                  const QVariantMap &options,
++                  QVariantMap &results);
++    uint SaveFile(const QDBusObjectPath &handle,
++                  const QString &app_id,
++                  const QString &parent_window,
++                  const QString &title,
++                  const QVariantMap &options,
++                  QVariantMap &results);
++    uint SaveFiles(const QDBusObjectPath &handle,
++                   const QString &app_id,
++                   const QString &parent_window,
++                   const QString &title,
++                   const QVariantMap &options,
++                   QVariantMap &results);
++
++Q_SIGNALS:
++    void idle();
++
++private:
++    enum class Kind {
++        Open,
++        Save,
++        SaveFiles,
++    };
++    void request(Kind kind, const QDBusObjectPath &handle, const QString &title, const QVariantMap &options);
++
++    int m_open = 0;
++};
++
++#endif
+diff --git a/src/finder/filechooser/finderfiledialog.cpp b/src/finder/filechooser/finderfiledialog.cpp
+new file mode 100644
+index 000000000..eb5dcf49d
+--- /dev/null
++++ b/src/finder/filechooser/finderfiledialog.cpp
+@@ -0,0 +1,386 @@
++/*
++ * SPDX-FileCopyrightText: 2026 Brhett
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "finderfiledialog.h"
++#include "finder/finderchrome.h"
++#include "finder/findersidebar.h"
++#include "views/dolphinview.h"
++
++#include <KFilePlacesModel>
++#include <KLocalizedString>
++#include <KUrlNavigator>
++
++#include <QCloseEvent>
++#include <QComboBox>
++#include <QDir>
++#include <QDockWidget>
++#include <QFileInfo>
++#include <QGuiApplication>
++#include <QHBoxLayout>
++#include <QKeyEvent>
++#include <QLabel>
++#include <QLineEdit>
++#include <QMessageBox>
++#include <QMimeDatabase>
++#include <QPushButton>
++#include <QScreen>
++#include <QToolBar>
++#include <QVBoxLayout>
++#include <QWidgetAction>
++
++namespace
++{
++QAction *toolbarAction(QToolBar *toolBar, const QString &name, const QString &icon, const QString &text)
++{
++    auto *action = new QAction(QIcon::fromTheme(icon), text, toolBar);
++    action->setObjectName(name); // FinderChrome groups buttons into capsules by name
++    toolBar->addAction(action);
++    return action;
++}
++}
++
++FinderFileDialog::FinderFileDialog(const Options &options)
++    : QMainWindow(nullptr)
++    , m_options(options)
++    , m_places(new KFilePlacesModel(this))
++{
++    setAttribute(Qt::WA_DeleteOnClose, false);
++    resize(960, 600);
++
++    // Toolbar: back/forward, the folder title (over a hidden path field), icon/list views.
++    auto *toolBar = new QToolBar(this);
++    toolBar->setObjectName(QStringLiteral("finderChooserToolBar"));
++    toolBar->setMovable(false);
++    toolBar->setIconSize(QSize(22, 22));
++    addToolBar(toolBar);
++    m_back = toolbarAction(toolBar, QStringLiteral("go_back"), QStringLiteral("go-previous"), i18nc("@action", "Back"));
++    m_forward = toolbarAction(toolBar, QStringLiteral("go_forward"), QStringLiteral("go-next"), i18nc("@action", "Forward"));
++    m_navigator = new KUrlNavigator(m_places, m_options.folder, toolBar);
++    auto *navigatorAction = new QWidgetAction(toolBar);
++    navigatorAction->setObjectName(QStringLiteral("url_navigators"));
++    navigatorAction->setDefaultWidget(m_navigator);
++    toolBar->addAction(navigatorAction);
++    m_icons = toolbarAction(toolBar, QStringLiteral("icons"), QStringLiteral("view-list-icons"), i18nc("@action", "Icons"));
++    m_details = toolbarAction(toolBar, QStringLiteral("details"), QStringLiteral("view-list-tree"), i18nc("@action", "List"));
++    m_icons->setCheckable(true);
++    m_details->setCheckable(true);
++    connect(m_back, &QAction::triggered, m_navigator, &KUrlNavigator::goBack);
++    connect(m_forward, &QAction::triggered, m_navigator, &KUrlNavigator::goForward);
++
++    // Sidebar, as in Finder (without AirDrop).
++    m_sidebar = new FinderSidebar(m_places);
++    m_sidebar->setAirDropShown(false);
++    auto *dock = new QDockWidget(this);
++    dock->setObjectName(QStringLiteral("chooserSidebar"));
++    dock->setTitleBarWidget(new QWidget(dock));
++    dock->setFeatures(QDockWidget::NoDockWidgetFeatures);
++    dock->setWidget(m_sidebar);
++    dock->setMinimumWidth(190);
++    addDockWidget(Qt::LeftDockWidgetArea, dock);
++    connect(m_sidebar, &FinderSidebar::placeActivated, this, &FinderFileDialog::setFolder);
++    connect(m_sidebar, &FinderSidebar::tabRequested, this, &FinderFileDialog::setFolder);
++
++    // The files, in Dolphin's view (Finder's list and icon styling).
++    auto *central = new QWidget(this);
++    auto *layout = new QVBoxLayout(central);
++    layout->setContentsMargins(0, 0, 0, 0);
++    layout->setSpacing(0);
++    m_view = new DolphinView(m_options.folder, central);
++    m_view->setActive(true);
++    layout->addWidget(m_view, 1);
++
++    // Bottom bar: Save As, file type, Cancel and Open/Save.
++    auto *bar = new QWidget(central);
++    bar->setObjectName(QStringLiteral("chooserBar"));
++    auto *row = new QHBoxLayout(bar);
++    row->setContentsMargins(16, 10, 16, 12);
++    row->setSpacing(10);
++    if (m_options.mode == Save) {
++        auto *label = new QLabel(i18nc("@label Finder file chooser", "Save As:"), bar);
++        row->addWidget(label);
++        m_name = new QLineEdit(m_options.currentName, bar);
++        m_name->setMinimumWidth(260);
++        row->addWidget(m_name, 2);
++        connect(m_name, &QLineEdit::textChanged, this, &FinderFileDialog::updateAcceptButton);
++        connect(m_name, &QLineEdit::returnPressed, this, &FinderFileDialog::accept);
++    }
++    if (!m_options.filters.isEmpty() && !m_options.directory) {
++        m_filter = new QComboBox(bar);
++        for (const PortalFilter &filter : std::as_const(m_options.filters)) {
++            m_filter->addItem(filter.name);
++        }
++        m_filter->setCurrentIndex(qBound(0, m_options.currentFilter, m_options.filters.size() - 1));
++        connect(m_filter, &QComboBox::currentIndexChanged, this, &FinderFileDialog::applyFilter);
++        row->addWidget(m_filter);
++    }
++    row->addStretch(1);
++    auto *cancel = new QPushButton(i18nc("@action:button", "Cancel"), bar);
++    cancel->setObjectName(QStringLiteral("chooserCancel"));
++    connect(cancel, &QPushButton::clicked, this, &FinderFileDialog::cancel);
++    row->addWidget(cancel);
++    QString acceptText = m_options.acceptLabel;
++    acceptText.remove(QLatin1Char('_')); // GTK mnemonics
++    if (acceptText.isEmpty()) {
++        acceptText = m_options.mode == Save ? i18nc("@action:button", "Save")
++            : m_options.directory           ? i18nc("@action:button", "Choose")
++                                            : i18nc("@action:button", "Open");
++    }
++    m_accept = new QPushButton(acceptText, bar);
++    m_accept->setObjectName(QStringLiteral("chooserAccept"));
++    m_accept->setDefault(true);
++    connect(m_accept, &QPushButton::clicked, this, &FinderFileDialog::accept);
++    row->addWidget(m_accept);
++    bar->setStyleSheet(QStringLiteral(
++        "#chooserBar { border-top: 1px solid rgba(255,255,255,24); }"
++        "QLineEdit { background: rgba(255,255,255,14); border: 1px solid rgba(255,255,255,30); border-radius: 7px; padding: 4px 8px; }"
++        "QLineEdit:focus { border: 1px solid #0a84ff; }"
++        "QPushButton { border: none; border-radius: 7px; padding: 6px 18px; min-width: 64px; background: rgba(255,255,255,30); color: white; }"
++        "QPushButton:hover { background: rgba(255,255,255,44); }"
++        "QPushButton#chooserAccept { background: #0a84ff; }"
++        "QPushButton#chooserAccept:hover { background: #3a9bff; }"
++        "QPushButton#chooserAccept:disabled { background: rgba(10,132,255,90); color: rgba(255,255,255,120); }"));
++    layout->addWidget(bar);
++    setCentralWidget(central);
++
++    // Finder's window chrome: frameless rounded window, stoplights, glass sidebar,
++    // capsule toolbar, and the folder title in place of the path.
++    auto *chrome = new FinderChrome(this);
++    chrome->setToolBar(toolBar);
++    chrome->setSidebar(dock);
++
++    // Following the folder: navigator ↔ view ↔ sidebar ↔ title.
++    connect(m_navigator, &KUrlNavigator::urlChanged, this, [this](const QUrl &url) {
++        if (m_view->url() != url) {
++            m_view->setUrl(url);
++        }
++        m_sidebar->setUrl(url);
++        const QString name = url.fileName();
++        setWindowTitle(name.isEmpty() ? url.toDisplayString(QUrl::PreferLocalFile) : name);
++        m_back->setEnabled(m_navigator->historyIndex() + 1 < m_navigator->historySize());
++        m_forward->setEnabled(m_navigator->historyIndex() > 0);
++        updateAcceptButton();
++    });
++    connect(m_view, &DolphinView::itemActivated, this, [this](const KFileItem &item) {
++        if (item.isDir()) {
++            setFolder(item.url());
++        } else if (!m_options.directory) {
++            accept();
++        }
++    });
++    connect(m_view, &DolphinView::itemsActivated, this, [this]() {
++        if (!m_options.directory) {
++            accept();
++        }
++    });
++    connect(m_view, &DolphinView::selectionChanged, this, [this](const KFileItemList &selection) {
++        // Saving: picking an existing file takes its name.
++        if (m_name && selection.count() == 1 && !selection.first().isDir()) {
++            m_name->setText(selection.first().name());
++        }
++        updateAcceptButton();
++    });
++    auto syncMode = [this]() {
++        m_icons->setChecked(m_view->viewMode() == DolphinView::IconsView);
++        m_details->setChecked(m_view->viewMode() == DolphinView::DetailsView);
++    };
++    connect(m_view, &DolphinView::modeChanged, this, syncMode);
++    connect(m_icons, &QAction::triggered, this, [this, syncMode]() {
++        m_view->setViewMode(DolphinView::IconsView);
++        syncMode();
++    });
++    connect(m_details, &QAction::triggered, this, [this, syncMode]() {
++        m_view->setViewMode(DolphinView::DetailsView);
++        syncMode();
++    });
++
++    // Initial state.
++    QString title = m_options.title;
++    title.remove(QLatin1Char('_'));
++    setFolder(m_options.folder);
++    m_sidebar->setUrl(m_options.folder);
++    setWindowTitle(m_options.folder.fileName().isEmpty() ? m_options.folder.toDisplayString(QUrl::PreferLocalFile) : m_options.folder.fileName());
++    syncMode();
++    applyFilter(m_filter ? m_filter->currentIndex() : -1);
++    m_back->setEnabled(false);
++    m_forward->setEnabled(false);
++    updateAcceptButton();
++    if (!title.isEmpty()) {
++        setAccessibleName(title);
++    }
++}
++
++const FinderFileDialog::Options &FinderFileDialog::options() const
++{
++    return m_options;
++}
++
++void FinderFileDialog::present()
++{
++    if (QScreen *screen = QGuiApplication::primaryScreen()) {
++        const QRect area = screen->availableGeometry();
++        move(area.center() - rect().center());
++    }
++    show();
++    raise();
++    activateWindow();
++    if (m_name) {
++        // Select the name without its extension, as Finder does.
++        m_name->setFocus();
++        const int dot = m_name->text().lastIndexOf(QLatin1Char('.'));
++        m_name->setSelection(0, dot > 0 ? dot : m_name->text().size());
++    } else {
++        m_view->setFocus();
++    }
++}
++
++void FinderFileDialog::setFolder(const QUrl &url)
++{
++    if (m_navigator->locationUrl() != url) {
++        m_navigator->setLocationUrl(url);
++    }
++    if (m_view->url() != url) {
++        m_view->setUrl(url);
++    }
++}
++
++void FinderFileDialog::applyFilter(int index)
++{
++    if (m_options.directory) {
++        m_view->setMimeTypeFilters({QStringLiteral("inode/directory")});
++        return;
++    }
++    if (index < 0 || index >= m_options.filters.size()) {
++        m_view->setMimeTypeFilters({});
++        return;
++    }
++    // Filters come as globs and MIME types; Dolphin's view filters by MIME
++    // type, so map globs ("*.png") to the types they stand for. Folders stay
++    // visible so you can still browse.
++    QMimeDatabase db;
++    QStringList types{QStringLiteral("inode/directory")};
++    for (const PortalFilterRule &rule : m_options.filters.at(index).rules) {
++        if (rule.type == 1) {
++            types.append(rule.pattern);
++            continue;
++        }
++        if (rule.pattern == QLatin1String("*") || rule.pattern == QLatin1String("*.*")) {
++            m_view->setMimeTypeFilters({}); // everything
++            return;
++        }
++        const QList<QMimeType> matches = db.mimeTypesForFileName(QStringLiteral("file") + rule.pattern.mid(rule.pattern.indexOf(QLatin1Char('.'))));
++        if (matches.isEmpty()) {
++            m_view->setMimeTypeFilters({}); // a glob no type covers: don't hide anything
++            return;
++        }
++        for (const QMimeType &type : matches) {
++            types.append(type.name());
++        }
++    }
++    m_view->setMimeTypeFilters(types);
++}
++
++QList<QUrl> FinderFileDialog::chosenFiles() const
++{
++    QList<QUrl> urls;
++    const KFileItemList selected = m_view->selectedItems();
++    for (const KFileItem &item : selected) {
++        if (m_options.directory ? item.isDir() : !item.isDir()) {
++            urls.append(item.url());
++        }
++    }
++    if (!m_options.multiple && urls.size() > 1) {
++        urls = {urls.first()};
++    }
++    return urls;
++}
++
++void FinderFileDialog::updateAcceptButton()
++{
++    if (m_options.mode == Save) {
++        m_accept->setEnabled(m_name && !m_name->text().trimmed().isEmpty());
++    } else if (m_options.directory) {
++        m_accept->setEnabled(true); // the selected folder, or the one shown
++    } else {
++        // Open is also how you enter a selected folder.
++        const KFileItemList selected = m_view->selectedItems();
++        m_accept->setEnabled(!selected.isEmpty());
++    }
++}
++
++void FinderFileDialog::accept()
++{
++    if (m_options.mode == Save) {
++        const QString name = m_name->text().trimmed();
++        if (name.isEmpty()) {
++            return;
++        }
++        const QUrl target = QUrl::fromLocalFile(QDir(m_view->url().toLocalFile()).filePath(name));
++        if (QFileInfo::exists(target.toLocalFile())) {
++            const auto answer = QMessageBox::question(this,
++                                                      i18nc("@title:window", "Replace File?"),
++                                                      i18nc("@info", "“%1” already exists. Do you want to replace it?", name),
++                                                      QMessageBox::Cancel | QMessageBox::Yes,
++                                                      QMessageBox::Cancel);
++            if (answer != QMessageBox::Yes) {
++                return;
++            }
++        }
++        finish(true, {target});
++        return;
++    }
++    if (m_options.directory) {
++        const QList<QUrl> folders = chosenFiles();
++        finish(true, folders.isEmpty() ? QList<QUrl>{m_view->url()} : folders);
++        return;
++    }
++    const QList<QUrl> files = chosenFiles();
++    if (!files.isEmpty()) {
++        finish(true, files);
++        return;
++    }
++    // Only a folder selected: Open goes into it.
++    const KFileItemList selected = m_view->selectedItems();
++    if (selected.count() == 1 && selected.first().isDir()) {
++        setFolder(selected.first().url());
++    }
++}
++
++void FinderFileDialog::cancel()
++{
++    finish(false, {});
++}
++
++void FinderFileDialog::finish(bool accepted, const QList<QUrl> &urls)
++{
++    if (m_done) {
++        return;
++    }
++    m_done = true;
++    hide();
++    Q_EMIT finished(accepted, urls, m_filter ? m_filter->currentIndex() : -1);
++}
++
++void FinderFileDialog::closeEvent(QCloseEvent *event)
++{
++    // The red stoplight cancels.
++    event->ignore();
++    cancel();
++}
++
++void FinderFileDialog::keyPressEvent(QKeyEvent *event)
++{
++    if (event->key() == Qt::Key_Escape) {
++        cancel();
++        return;
++    }
++    if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) && m_accept->isEnabled()) {
++        accept();
++        return;
++    }
++    QMainWindow::keyPressEvent(event);
++}
++
++#include "moc_finderfiledialog.cpp"
+diff --git a/src/finder/filechooser/finderfiledialog.h b/src/finder/filechooser/finderfiledialog.h
+new file mode 100644
+index 000000000..d2c11ead3
+--- /dev/null
++++ b/src/finder/filechooser/finderfiledialog.h
+@@ -0,0 +1,96 @@
++/*
++ * SPDX-FileCopyrightText: 2026 Brhett
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef FINDERFILEDIALOG_H
++#define FINDERFILEDIALOG_H
++
++#include "filechooserportal.h"
++
++#include <QMainWindow>
++#include <QUrl>
++
++class DolphinView;
++class FinderSidebar;
++class KFilePlacesModel;
++class KUrlNavigator;
++class QAction;
++class QComboBox;
++class QLineEdit;
++class QPushButton;
++
++/**
++ * @brief The Finder-style Open/Save window behind the file chooser portal.
++ *
++ * Built from Finder's own parts: its window chrome (rounded, stoplights,
++ * glass sidebar, toolbar capsules and folder title), its sidebar, and
++ * Dolphin's file view with Finder's list and icon styling, so it looks like a
++ * Finder window with Open/Save controls along the bottom.
++ */
++class FinderFileDialog : public QMainWindow
++{
++    Q_OBJECT
++
++public:
++    enum Mode {
++        Open,
++        Save,
++    };
++
++    struct Options {
++        Mode mode = Open;
++        QString title;
++        QString acceptLabel;
++        bool multiple = false;
++        bool directory = false; // choose a folder rather than files
++        PortalFilterList filters;
++        int currentFilter = 0;
++        QString currentName; // Save: the suggested file name
++        QUrl folder; // where to start
++    };
++
++    explicit FinderFileDialog(const Options &options);
++
++    const Options &options() const;
++
++    /** Shows the window and gives it focus. */
++    void present();
++
++public Q_SLOTS:
++    void cancel();
++
++Q_SIGNALS:
++    /** The dialog is done: the chosen URLs (if @p accepted) and the filter in use. */
++    void finished(bool accepted, const QList<QUrl> &urls, int filter);
++
++protected:
++    void closeEvent(QCloseEvent *event) override;
++    void keyPressEvent(QKeyEvent *event) override;
++
++private:
++    void setFolder(const QUrl &url);
++    void applyFilter(int index);
++    void updateAcceptButton();
++    void accept();
++    void finish(bool accepted, const QList<QUrl> &urls);
++    QList<QUrl> chosenFiles() const;
++
++    Options m_options;
++    bool m_done = false;
++
++    KFilePlacesModel *m_places;
++    KUrlNavigator *m_navigator;
++    DolphinView *m_view;
++    FinderSidebar *m_sidebar;
++    QAction *m_back;
++    QAction *m_forward;
++    QAction *m_icons;
++    QAction *m_details;
++    QLineEdit *m_name = nullptr; // Save only
++    QComboBox *m_filter = nullptr;
++    QPushButton *m_accept;
++};
++
++#endif
+diff --git a/src/finder/filechooser/main.cpp b/src/finder/filechooser/main.cpp
+new file mode 100644
+index 000000000..115297207
+--- /dev/null
++++ b/src/finder/filechooser/main.cpp
+@@ -0,0 +1,53 @@
++/*
++ * SPDX-FileCopyrightText: 2026 Brhett
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++// finder-filechooser: Finder's Open/Save windows for xdg-desktop-portal.
++// Started by D-Bus on the first request; quits after a while with nothing open.
++
++#include "filechooserportal.h"
++
++#include <KAboutData>
++#include <KLocalizedString>
++
++#include <QApplication>
++#include <QIcon>
++#include <QDBusConnection>
++#include <QTimer>
++
++int main(int argc, char **argv)
++{
++    QApplication app(argc, argv);
++    app.setQuitOnLastWindowClosed(false);
++    KLocalizedString::setApplicationDomain("dolphin");
++
++    // Same component as Finder: shares its settings and per-folder view setup.
++    KAboutData about(QStringLiteral("finder"), i18nc("@title", "Finder"), QStringLiteral("1.0"));
++    about.setDesktopFileName(QStringLiteral("org.brhett.finder"));
++    KAboutData::setApplicationData(about);
++    QApplication::setWindowIcon(QIcon::fromTheme(QStringLiteral("system-file-manager")));
++
++    auto *portal = new FileChooserPortal(&app);
++    QDBusConnection bus = QDBusConnection::sessionBus();
++    if (!bus.registerObject(QStringLiteral("/org/freedesktop/portal/desktop"), portal, QDBusConnection::ExportAllSlots)
++        || !bus.registerService(QStringLiteral("org.freedesktop.impl.portal.desktop.finder"))) {
++        qWarning("finder-filechooser: could not register on the session bus (already running?)");
++        return 1;
++    }
++
++    // Quit when idle; D-Bus starts us again on the next request.
++    QTimer idle;
++    idle.setSingleShot(true);
++    idle.setInterval(5 * 60 * 1000);
++    QObject::connect(&idle, &QTimer::timeout, &app, [portal]() {
++        if (portal->openRequests() == 0) {
++            QCoreApplication::quit();
++        }
++    });
++    QObject::connect(portal, &FileChooserPortal::idle, &idle, qOverload<>(&QTimer::start));
++    idle.start();
++
++    return app.exec();
++}
+diff --git a/src/finder/finderchrome.cpp b/src/finder/finderchrome.cpp
+index 2e9cf874b..0acf6722f 100644
+--- a/src/finder/finderchrome.cpp
++++ b/src/finder/finderchrome.cpp
+@@ -391,6 +391,13 @@ void FinderChrome::setToolBar(QToolBar *toolBar)
+     updateTitle();
+     watchNavigators();
+ 
++    // The rest (column view, AirDrop, transfer cards, tabs) belongs to the
++    // Finder window itself, not to other windows using this chrome (the file
++    // chooser).
++    if (!qobject_cast<DolphinMainWindow *>(m_window)) {
++        return;
++    }
++
+     // Finder's column view: a fourth view button after the list view.
+     if (!m_columnsAction) {
+         m_columnsAction = new QAction(columnsIcon(), i18nc("@action:intoolbar Finder view mode", "Columns"), this);
+@@ -523,6 +530,9 @@ void FinderChrome::hideAirDrop()
+ 
+ void FinderChrome::placeTransfers()
+ {
++    if (!qobject_cast<DolphinMainWindow *>(m_window)) {
++        return; // only Finder's own window shows AirDrop transfers
++    }
+     if (!m_transfers) {
+         // Creating it also starts FinderAirDrop watching for incoming transfers.
+         m_transfers = new FinderTransfersView(m_window);
+diff --git a/src/finder/findersidebar.cpp b/src/finder/findersidebar.cpp
+index 2d62a51ce..829f17ffc 100644
+--- a/src/finder/findersidebar.cpp
++++ b/src/finder/findersidebar.cpp
+@@ -222,10 +222,12 @@ void FinderSidebar::rebuild()
+     if (!locations.isEmpty()) {
+         header(i18nc("@title Finder sidebar section", "Locations"));
+         // AirDrop leads Locations, as in Finder; it opens the AirDrop panel.
+-        auto *airDrop = new QStandardItem(i18nc("@item:inlistbox Finder sidebar", "AirDrop"));
+-        airDrop->setData(QStringLiteral("finder-airdrop"), Qt::DecorationRole);
+-        airDrop->setData(AirDropUrl(), UrlRole);
+-        m_model->appendRow(airDrop);
++        if (m_airDropShown) {
++            auto *airDrop = new QStandardItem(i18nc("@item:inlistbox Finder sidebar", "AirDrop"));
++            airDrop->setData(QStringLiteral("finder-airdrop"), Qt::DecorationRole);
++            airDrop->setData(AirDropUrl(), UrlRole);
++            m_model->appendRow(airDrop);
++        }
+         for (auto *item : std::as_const(locations)) {
+             m_model->appendRow(item);
+         }
+@@ -233,6 +235,14 @@ void FinderSidebar::rebuild()
+     setUrl(m_url);
+ }
+ 
++void FinderSidebar::setAirDropShown(bool shown)
++{
++    if (m_airDropShown != shown) {
++        m_airDropShown = shown;
++        rebuild();
++    }
++}
++
+ QUrl FinderSidebar::AirDropUrl()
+ {
+     return QUrl(QStringLiteral("finder-airdrop:/"));
+diff --git a/src/finder/findersidebar.h b/src/finder/findersidebar.h
+index fb4cc0c45..b8ef9f0d9 100644
+--- a/src/finder/findersidebar.h
++++ b/src/finder/findersidebar.h
+@@ -35,6 +35,9 @@ public:
+     /** The sidebar's AirDrop item; setUrl(AirDropUrl()) highlights it. */
+     static QUrl AirDropUrl();
+ 
++    /** Whether to list AirDrop (not in the file chooser). */
++    void setAirDropShown(bool shown);
++
+     enum Roles {
+         UrlRole = Qt::UserRole + 1,
+         HeaderRole,
+@@ -63,6 +66,7 @@ private:
+     QUrl m_url;
+     QPersistentModelIndex m_pendingSetup; // device being mounted before opening
+     bool m_pendingSetupNewTab = false;
++    bool m_airDropShown = true;
+ };
+ 
+ #endif
+-- 
+2.56.0
+

@@ -1,0 +1,19 @@
+{
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "Brhett"
+            }
+        ],
+        "Category": "System Information",
+        "Description": "macOS-style Notification Center with top-right banners",
+        "Icon": "preferences-desktop-notification-bell",
+        "Id": "org.brhett.macnotifications",
+        "License": "GPL-2.0+",
+        "Name": "Mac Notifications",
+        "Version": "1.0"
+    },
+    "KPackageStructure": "Plasma/Applet",
+    "X-Plasma-API-Minimum-Version": "6.0",
+    "X-Plasma-NotificationArea": "false"
+}

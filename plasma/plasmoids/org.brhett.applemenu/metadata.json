@@ -1,0 +1,18 @@
+{
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "Brhett"
+            }
+        ],
+        "Category": "Utilities",
+        "Description": "A macOS-style system menu for the panel",
+        "Icon": "fedora-logo-icon",
+        "Id": "org.brhett.applemenu",
+        "License": "GPL-2.0+",
+        "Name": "Apple Menu",
+        "Version": "1.0"
+    },
+    "KPackageStructure": "Plasma/Applet",
+    "X-Plasma-API-Minimum-Version": "6.0"
+}

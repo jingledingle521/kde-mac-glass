@@ -1,0 +1,54 @@
+From 9fd2b6f95451fee5e60add89edafacff76ffc005 Mon Sep 17 00:00:00 2001
+From: Brhett <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 12:32:48 -0500
+Subject: [PATCH 16/30] Finder sidebar: highlight a place only when showing
+ that exact folder
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ src/finder/findersidebar.cpp | 23 ++++++-----------------
+ 1 file changed, 6 insertions(+), 17 deletions(-)
+
+diff --git a/src/finder/findersidebar.cpp b/src/finder/findersidebar.cpp
+index c7949a0b4..db465a91b 100644
+--- a/src/finder/findersidebar.cpp
++++ b/src/finder/findersidebar.cpp
+@@ -228,28 +228,17 @@ void FinderSidebar::rebuild()
+ void FinderSidebar::setUrl(const QUrl &url)
+ {
+     m_url = url;
+-    // Select the place whose URL is the longest prefix of the current folder.
+-    QModelIndex best;
+-    int bestLength = -1;
++    // Finder highlights a place only while showing that exact folder, not
++    // while inside one of its subfolders.
+     for (int row = 0; row < m_model->rowCount(); ++row) {
+         const QModelIndex index = m_model->index(row, 0);
+         const QUrl place = index.data(UrlRole).toUrl();
+-        if (!place.isValid()) {
+-            continue;
+-        }
+-        if (place.matches(url, QUrl::StripTrailingSlash) || place.isParentOf(url)) {
+-            const int length = place.toString().length();
+-            if (length > bestLength) {
+-                best = index;
+-                bestLength = length;
+-            }
++        if (place.isValid() && place.matches(url, QUrl::StripTrailingSlash)) {
++            selectionModel()->setCurrentIndex(index, QItemSelectionModel::ClearAndSelect);
++            return;
+         }
+     }
+-    if (best.isValid()) {
+-        selectionModel()->setCurrentIndex(best, QItemSelectionModel::ClearAndSelect);
+-    } else {
+-        selectionModel()->clearSelection();
+-    }
++    selectionModel()->clear();
+ }
+ 
+ QModelIndex FinderSidebar::placeIndex(const QModelIndex &row) const
+-- 
+2.56.0
+

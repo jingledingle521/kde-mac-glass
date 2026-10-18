@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Build Finder (Dolphin restyled as macOS Golden Gate Finder) and install it
+# for the current user. Stock Dolphin is left untouched; Finder is a separate
+# app with its own settings (finderrc) and toolbar layout.
+#
+#   build-finder            build and install into ~/.local/opt/finder
+#   build-finder --deps     first install Dolphin's build dependencies (asks
+#                           for your password through the KDE root prompt)
+set -euo pipefail
+
+here=$(cd "$(dirname "$0")" && pwd)
+version=v26.08.1               # the Dolphin release the patches apply to
+src=${XDG_CACHE_HOME:-$HOME/.cache}/mac-glass-kde/finder-src
+
+if [ "${1:-}" = --deps ]; then
+    pkexec dnf -y builddep dolphin
+fi
+
+for tool in git cmake ninja g++; do
+    command -v "$tool" >/dev/null || { echo "missing $tool (try: build-finder --deps)" >&2; exit 1; }
+done
+
+if [ ! -d "$src/.git" ]; then
+    mkdir -p "$(dirname "$src")"
+    git clone --branch "$version" --depth 1 https://invent.kde.org/system/dolphin.git "$src"
+fi
+cd "$src"
+git checkout -q -f "$version"
+git -c user.name=Finder -c user.email=finder@localhost am -q --abort 2>/dev/null || true
+git -c user.name=Finder -c user.email=finder@localhost am -q "$here"/patches/*.patch
+
+# The patched tree carries Finder's own installer: it builds and installs
+# Finder and its file chooser, and points the desktop's Open/Save dialogs at it.
+exec "$src/finder-extras/install.sh"

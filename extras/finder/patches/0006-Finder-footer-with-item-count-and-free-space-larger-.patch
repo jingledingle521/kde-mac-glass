@@ -1,0 +1,264 @@
+From 0c7ea6fcc7256439308f584159e5e911934b18fc Mon Sep 17 00:00:00 2001
+From: Brhett <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 10:24:43 -0500
+Subject: [PATCH 06/30] Finder: footer with item count and free space, larger
+ sidebar rows
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ src/finder/finderchrome.cpp               |  4 ++--
+ src/finder/findersidebar.cpp              | 14 +++++++-----
+ src/settings/dolphin_generalsettings.kcfg |  4 ++--
+ src/statusbar/dolphinstatusbar.cpp        | 27 ++++++++++++++++++-----
+ src/statusbar/dolphinstatusbar.h          |  2 ++
+ src/statusbar/statusbarspaceinfo.cpp      | 12 ++++++++++
+ src/statusbar/statusbarspaceinfo.h        |  7 ++++++
+ src/views/dolphinview.cpp                 |  9 ++++++++
+ 8 files changed, 65 insertions(+), 14 deletions(-)
+
+diff --git a/src/finder/finderchrome.cpp b/src/finder/finderchrome.cpp
+index 2e06b7d9e..7c3ce850d 100644
+--- a/src/finder/finderchrome.cpp
++++ b/src/finder/finderchrome.cpp
+@@ -36,9 +36,9 @@ constexpr int WindowRadius = 12; // macOS window corner radius
+ constexpr int ResizeBorder = 6; // grab zone along the edges, inside the window
+ constexpr int ShadowSize = 32; // how far the shadow reaches outside the window
+ 
+-const QColor ContentColor(30, 30, 32);
++const QColor ContentColor(32, 32, 37); // Golden Gate dark content, slightly cool
+ const QColor SidebarColor(44, 44, 48, 200); // translucent: KWin blurs behind it
+-const QColor HairlineDark(0, 0, 0, 140);
++const QColor HairlineDark(0, 0, 0, 90);
+ const QColor HairlineLight(255, 255, 255, 18);
+ const QColor CapsuleFill(255, 255, 255, 20); // glass capsules behind toolbar buttons
+ const QColor CapsuleRim(255, 255, 255, 26);
+diff --git a/src/finder/findersidebar.cpp b/src/finder/findersidebar.cpp
+index 18db2879f..0f36c9a3e 100644
+--- a/src/finder/findersidebar.cpp
++++ b/src/finder/findersidebar.cpp
+@@ -20,10 +20,10 @@
+ 
+ namespace
+ {
+-constexpr int RowHeight = 26;
+-constexpr int HeaderHeight = 30;
++constexpr int RowHeight = 30;
++constexpr int HeaderHeight = 34;
+ constexpr int SideMargin = 10; // selection inset from the sidebar edges
+-constexpr int IconSize = 16;
++constexpr int IconSize = 18;
+ 
+ const QColor Accent(0x0a, 0x84, 0xff); // macOS dark-mode system blue
+ const QColor HeaderColor(255, 255, 255, 110);
+@@ -109,10 +109,14 @@ public:
+         p->drawPixmap(QPoint(iconX, r.top() + (r.height() - IconSize) / 2), pm);
+ 
+         p->setPen(TextColor);
+-        p->setFont(option.font);
++        QFont font = option.font;
++        if (option.state & QStyle::State_Selected) {
++            font.setWeight(QFont::DemiBold); // Finder bolds the current place
++        }
++        p->setFont(font);
+         const QRect textRect(iconX + IconSize + 8, r.top(), int(pill.right()) - (iconX + IconSize + 8) - 6, r.height());
+         p->drawText(textRect, Qt::AlignVCenter | Qt::AlignLeft,
+-                    option.fontMetrics.elidedText(index.data(Qt::DisplayRole).toString(), Qt::ElideRight, textRect.width()));
++                    QFontMetrics(font).elidedText(index.data(Qt::DisplayRole).toString(), Qt::ElideRight, textRect.width()));
+         p->restore();
+     }
+ };
+diff --git a/src/settings/dolphin_generalsettings.kcfg b/src/settings/dolphin_generalsettings.kcfg
+index fd25f4774..f68b41fd8 100644
+--- a/src/settings/dolphin_generalsettings.kcfg
++++ b/src/settings/dolphin_generalsettings.kcfg
+@@ -146,8 +146,8 @@
+                 <choice name="Disabled" />
+             </choices>
+             <label>Statusbar</label>
+-            <!-- Finder: a small status line, like Finder's footer. -->
+-            <default>0</default>
++            <!-- Finder: a footer with item count, free space and zoom. -->
++            <default>1</default>
+             <emit signal="showStatusBarChanged" />
+         </entry>
+         <entry name="ShowZoomSlider" type="Bool">
+diff --git a/src/statusbar/dolphinstatusbar.cpp b/src/statusbar/dolphinstatusbar.cpp
+index 4b2bb6f0f..cca821de7 100644
+--- a/src/statusbar/dolphinstatusbar.cpp
++++ b/src/statusbar/dolphinstatusbar.cpp
+@@ -81,6 +81,12 @@ DolphinStatusBar::DolphinStatusBar(QWidget *parent)
+     // Initialize space information
+     m_spaceInfo = new StatusBarSpaceInfo(contentsContainer);
+     connect(m_spaceInfo, &StatusBarSpaceInfo::showMessage, this, &DolphinStatusBar::showMessage);
++    // Finder shows free space as text after the item count.
++    m_spaceInfo->setHeadless(true);
++    connect(m_spaceInfo, &StatusBarSpaceInfo::availableChanged, this, [this](const QString &available) {
++        m_available = available;
++        m_updateLabelTextTimer->start();
++    });
+     connect(m_spaceInfo,
+             &StatusBarSpaceInfo::showInstallationProgress,
+             this,
+@@ -130,7 +136,10 @@ DolphinStatusBar::DolphinStatusBar(QWidget *parent)
+     m_label->setFixedHeight(contentHeight);
+     m_label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+ 
+-    m_zoomSlider->setMaximumWidth(fontMetrics.averageCharWidth() * 15);
++    m_zoomSlider->setFixedWidth(fontMetrics.averageCharWidth() * 15);
++    m_label->setAlignment(Qt::AlignCenter);
++    m_balance = new QWidget(contentsContainer);
++    m_balance->setFixedWidth(fontMetrics.averageCharWidth() * 15);
+ 
+     m_spaceInfo->setFixedHeight(contentHeight);
+     m_spaceInfo->setMaximumWidth(fontMetrics.averageCharWidth() * 25);
+@@ -142,6 +151,7 @@ DolphinStatusBar::DolphinStatusBar(QWidget *parent)
+     m_topLayout = new QHBoxLayout(contentsContainer);
+     updateContentsMargins();
+     m_topLayout->setSpacing(4);
++    m_topLayout->addWidget(m_balance);
+     m_topLayout->addWidget(m_label, 1);
+     m_topLayout->addWidget(m_zoomLabel);
+     m_topLayout->addWidget(m_zoomSlider, 1);
+@@ -317,6 +327,7 @@ void DolphinStatusBar::updateMode()
+         m_spaceInfo->setShown(false);
+         m_zoomSlider->setVisible(false);
+         m_zoomLabel->setVisible(false);
++        m_balance->setVisible(false);
+         setVisible(true, WithAnimation);
+         break;
+     case GeneralSettings::EnumShowStatusBar::FullWidth:
+@@ -353,7 +364,8 @@ void DolphinStatusBar::contextMenuEvent(QContextMenuEvent *event)
+         const bool visible = showZoomSliderAction->isChecked();
+         GeneralSettings::setShowZoomSlider(visible);
+         m_zoomSlider->setVisible(visible);
+-        m_zoomLabel->setVisible(visible);
++        m_zoomLabel->setVisible(false);
++        m_balance->setVisible(visible);
+     }
+     updateContentsMargins();
+ }
+@@ -404,7 +416,11 @@ void DolphinStatusBar::updateLabelText()
+     } else {
+         m_label->setTextFormat(Qt::PlainText);
+         m_label->setTextElideMode(Qt::ElideMiddle);
+-        m_label->setText(m_hoveredItemText.isEmpty() ? m_defaultText : m_hoveredItemText);
++        QString text = m_hoveredItemText.isEmpty() ? m_defaultText : m_hoveredItemText;
++        if (m_hoveredItemText.isEmpty() && !m_available.isEmpty() && GeneralSettings::showStatusBar() == GeneralSettings::EnumShowStatusBar::FullWidth) {
++            text = i18nc("@info:status Finder: items, free space", "%1, %2 available", text, m_available);
++        }
++        m_label->setText(text);
+     }
+     updateWidthToContent();
+ }
+@@ -423,7 +439,8 @@ void DolphinStatusBar::setExtensionsVisible(bool visible)
+     }
+ 
+     m_zoomSlider->setVisible(showZoomSlider);
+-    m_zoomLabel->setVisible(showZoomSlider);
++    m_zoomLabel->setVisible(false); // Finder: just the slider
++    m_balance->setVisible(showZoomSlider);
+     updateContentsMargins();
+ }
+ 
+@@ -431,7 +448,7 @@ void DolphinStatusBar::updateContentsMargins()
+ {
+     if (GeneralSettings::showStatusBar() == GeneralSettings::EnumShowStatusBar::FullWidth) {
+         // We reduce the outside margin for the flat button so it visually has the same margin as the status bar text label on the other end of the bar.
+-        m_topLayout->setContentsMargins(6, 0, 2, 0);
++        m_topLayout->setContentsMargins(10, 0, 14, 0);
+     } else {
+         // Add extra margins to toplayout to avoid clipping too early.
+         m_topLayout->setContentsMargins(clippingAmount() * 2, 0, clippingAmount(), 0);
+diff --git a/src/statusbar/dolphinstatusbar.h b/src/statusbar/dolphinstatusbar.h
+index 232a4ba07..9e01c93cd 100644
+--- a/src/statusbar/dolphinstatusbar.h
++++ b/src/statusbar/dolphinstatusbar.h
+@@ -184,6 +184,8 @@ private:
+     /** @see setDefaultText() */
+     QString m_defaultText;
+     KSqueezedTextLabel *m_label;
++    QWidget *m_balance = nullptr; // Finder: mirrors the zoom slider so the text stays centered
++    QString m_available; // free space, e.g. "412.3 GiB"
+     QLabel *m_zoomLabel;
+     StatusBarSpaceInfo *m_spaceInfo;
+ 
+diff --git a/src/statusbar/statusbarspaceinfo.cpp b/src/statusbar/statusbarspaceinfo.cpp
+index 028909795..0dbaa8e64 100644
+--- a/src/statusbar/statusbarspaceinfo.cpp
++++ b/src/statusbar/statusbarspaceinfo.cpp
+@@ -43,6 +43,14 @@ StatusBarSpaceInfo::StatusBarSpaceInfo(QWidget *parent)
+ 
+ StatusBarSpaceInfo::~StatusBarSpaceInfo() = default;
+ 
++void StatusBarSpaceInfo::setHeadless(bool headless)
++{
++    m_headless = headless;
++    if (headless) {
++        hide();
++    }
++}
++
+ void StatusBarSpaceInfo::setShown(bool shown)
+ {
+     m_shown = shown;
+@@ -123,6 +131,10 @@ void StatusBarSpaceInfo::slotValuesChanged()
+     m_hasSpaceInfo = true;
+ 
+     const quint64 available = m_observer->available();
++    Q_EMIT availableChanged(KIO::convertSize(available));
++    if (m_headless) {
++        return;
++    }
+     const quint64 used = size - available;
+     const int percentUsed = qRound(100.0 * qreal(used) / qreal(size));
+ 
+diff --git a/src/statusbar/statusbarspaceinfo.h b/src/statusbar/statusbarspaceinfo.h
+index c384c3b2f..da02bdd16 100644
+--- a/src/statusbar/statusbarspaceinfo.h
++++ b/src/statusbar/statusbarspaceinfo.h
+@@ -45,7 +45,13 @@ public:
+ 
+     void update();
+ 
++    /** Finder: report free space through availableChanged() and never show the bar itself. */
++    void setHeadless(bool headless);
++
+ Q_SIGNALS:
++    /** The free space as text, e.g. "412.3 GiB". */
++    void availableChanged(const QString &available);
++
+     /**
+      * Requests for @p message with the given @p messageType to be shown to the user in a non-modal way.
+      */
+@@ -81,6 +87,7 @@ private:
+     bool m_hasSpaceInfo;
+     /** Whether this widget is supposed to be visible long-term. @see StatusBarSpaceInfo::setShown(). */
+     bool m_shown;
++    bool m_headless = false;
+ };
+ 
+ #endif
+diff --git a/src/views/dolphinview.cpp b/src/views/dolphinview.cpp
+index b92e038e2..90eb723ae 100644
+--- a/src/views/dolphinview.cpp
++++ b/src/views/dolphinview.cpp
+@@ -767,6 +767,15 @@ void DolphinView::emitStatusBarText(const int folderCount, const int fileCount,
+     QString filesText;
+     QString summary;
+ 
++    // Finder: "63 items" / "3 of 63 selected".
++    if (selection == HasSelection) {
++        Q_EMIT statusBarTextChanged(i18nc("@info:status Finder", "%1 of %2 selected", folderCount + fileCount, m_model->count()));
++    } else {
++        Q_EMIT statusBarTextChanged(i18ncp("@info:status Finder", "1 item", "%1 items", m_model->count()));
++    }
++    Q_UNUSED(totalFileSize)
++    return;
++
+     if (selection == HasSelection) {
+         // At least 2 items are selected because the case of 1 selected item is handled in
+         // DolphinView::requestStatusBarText().
+-- 
+2.56.0
+

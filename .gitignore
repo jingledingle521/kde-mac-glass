@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+*.bak
+# per-install token for the Vivaldi extension
+extras/vivaldi-menu/extension/config.js

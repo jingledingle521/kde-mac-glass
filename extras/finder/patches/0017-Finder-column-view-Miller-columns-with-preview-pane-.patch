@@ -1,0 +1,595 @@
+From 871622531464e8ad916b5e6324f2c54bd77ef47f Mon Sep 17 00:00:00 2001
+From: Brhett <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 12:37:37 -0500
+Subject: [PATCH 17/30] Finder: column view (Miller columns) with preview pane,
+ replacing compact in the toolbar
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ src/CMakeLists.txt              |   1 +
+ src/dolphinui.rc                |   3 +-
+ src/finder/finderchrome.cpp     | 150 ++++++++++++++++++-
+ src/finder/finderchrome.h       |   9 ++
+ src/finder/findercolumnview.cpp | 245 ++++++++++++++++++++++++++++++++
+ src/finder/findercolumnview.h   |  61 ++++++++
+ 6 files changed, 466 insertions(+), 3 deletions(-)
+ create mode 100644 src/finder/findercolumnview.cpp
+ create mode 100644 src/finder/findercolumnview.h
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 966f6fd03..f1efb5204 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -287,6 +287,7 @@ add_library(dolphinstatic STATIC)
+ target_sources(dolphinstatic PRIVATE
+     finder/finderchrome.cpp
+     finder/findersidebar.cpp
++    finder/findercolumnview.cpp
+     admin/bar.cpp
+     admin/workerintegration.cpp
+     animatedheightwidget.cpp
+diff --git a/src/dolphinui.rc b/src/dolphinui.rc
+index 92e83d10a..cb7738d55 100644
+--- a/src/dolphinui.rc
++++ b/src/dolphinui.rc
+@@ -1,6 +1,6 @@
+ <?xml version="1.0"?>
+ <!DOCTYPE gui SYSTEM "kpartgui.dtd">
+-<gui name="dolphin" version="51">
++<gui name="dolphin" version="52">
+     <MenuBar>
+         <Menu name="file">
+             <Action name="new_menu" />
+@@ -112,7 +112,6 @@
+         <Action name="go_forward" />
+         <Action name="url_navigators" />
+         <Action name="icons" />
+-        <Action name="compact" />
+         <Action name="details" />
+         <Action name="group_by" />
+         <Action name="toggle_search" />
+diff --git a/src/finder/finderchrome.cpp b/src/finder/finderchrome.cpp
+index 9b6cccbe6..61f7fac73 100644
+--- a/src/finder/finderchrome.cpp
++++ b/src/finder/finderchrome.cpp
+@@ -5,6 +5,14 @@
+  */
+ 
+ #include "finderchrome.h"
++#include "findercolumnview.h"
++
++#include "dolphinmainwindow.h"
++#include "dolphinviewcontainer.h"
++#include "views/dolphinview.h"
++
++#include <KConfigGroup>
++#include <KSharedConfig>
+ 
+ #include <KUrlComboBox>
+ #include <KUrlNavigator>
+@@ -279,6 +287,7 @@ void FinderChrome::setToolBar(QToolBar *toolBar)
+                                          " padding: 0px; margin: 8px 0px; min-width: 38px; min-height: 26px; max-height: 26px; }"
+                                          "QToolButton:hover { background: rgba(255, 255, 255, 20); }"
+                                          "QToolButton:checked, QToolButton:pressed { background: rgba(255, 255, 255, 38); }"
++                                         "QToolButton[finderOff=\"true\"]:checked { background: transparent; }"
+                                          "QToolButton::menu-indicator { image: none; width: 0; }"));
+     if (!m_stoplights) {
+         m_stoplights = new Stoplights(m_window);
+@@ -374,6 +383,140 @@ void FinderChrome::setToolBar(QToolBar *toolBar)
+     connect(m_window, &QWidget::windowTitleChanged, this, &FinderChrome::updateTitle, Qt::UniqueConnection);
+     updateTitle();
+     watchNavigators();
++
++    // Finder's column view: a fourth view button after the list view.
++    if (!m_columnsAction) {
++        m_columnsAction = new QAction(columnsIcon(), i18nc("@action:intoolbar Finder view mode", "Columns"), this);
++        m_columnsAction->setObjectName(QStringLiteral("finder_columns"));
++        m_columnsAction->setCheckable(true);
++        m_columnsAction->setToolTip(i18nc("@info:tooltip", "View as columns"));
++        connect(m_columnsAction, &QAction::triggered, this, [this]() {
++            setColumnMode(true);
++        });
++        connect(qobject_cast<DolphinMainWindow *>(m_window), &DolphinMainWindow::urlChanged, this, [this]() {
++            if (m_columnMode) {
++                QTimer::singleShot(0, this, &FinderChrome::attachColumns);
++            }
++        });
++        m_columnMode = KSharedConfig::openConfig()->group(QStringLiteral("Finder")).readEntry("ColumnView", false);
++    }
++    QAction *after = nullptr;
++    for (int i = 0; i < actions.size(); ++i) {
++        const QString name = actions.at(i)->objectName();
++        if (name == QLatin1String("icons") || name == QLatin1String("compact") || name == QLatin1String("details")) {
++            // Picking another view mode leaves the column view.
++            connect(actions.at(i), &QAction::triggered, this, &FinderChrome::leaveColumnMode, Qt::UniqueConnection);
++        }
++    }
++    // Directly after the list-view button (before the gap to the next capsule).
++    const QList<QAction *> current = toolBar->actions();
++    for (int i = 0; i < current.size(); ++i) {
++        if (current.at(i)->objectName() == QLatin1String("details") && i + 1 < current.size()) {
++            after = current.at(i + 1);
++        }
++    }
++    toolBar->insertAction(after, m_columnsAction);
++    if (auto *button = qobject_cast<QToolButton *>(toolBar->widgetForAction(m_columnsAction))) {
++        button->setToolButtonStyle(Qt::ToolButtonIconOnly);
++    }
++    QTimer::singleShot(0, this, [this]() {
++        setColumnMode(m_columnMode);
++    });
++}
++
++QIcon FinderChrome::columnsIcon()
++{
++    // Finder's column-view glyph: a rounded box split into three panes.
++    QIcon icon;
++    for (const qreal dpr : {1.0, 1.5, 2.0}) {
++        QPixmap pm(QSize(22, 22) * dpr);
++        pm.setDevicePixelRatio(dpr);
++        pm.fill(Qt::transparent);
++        QPainter p(&pm);
++        p.setRenderHint(QPainter::Antialiasing);
++        p.scale(22.0 / 16.0, 22.0 / 16.0);
++        p.setPen(QPen(QColor(255, 255, 255, 225), 1.0));
++        p.setBrush(Qt::NoBrush);
++        p.drawRoundedRect(QRectF(1.5, 3.0, 13, 10), 2, 2);
++        p.drawLine(QPointF(5.8, 3.0), QPointF(5.8, 13.0));
++        p.drawLine(QPointF(10.2, 3.0), QPointF(10.2, 13.0));
++        p.end();
++        icon.addPixmap(pm);
++    }
++    return icon;
++}
++
++void FinderChrome::leaveColumnMode()
++{
++    setColumnMode(false);
++}
++
++void FinderChrome::setColumnMode(bool on)
++{
++    m_columnMode = on;
++    KConfigGroup group = KSharedConfig::openConfig()->group(QStringLiteral("Finder"));
++    if (group.readEntry("ColumnView", false) != on) {
++        group.writeEntry("ColumnView", on);
++        group.sync();
++    }
++    if (m_columnsAction) {
++        m_columnsAction->setChecked(on);
++    }
++    // Dolphin's own view mode stays checked underneath; hide its highlight.
++    if (m_toolBar) {
++        for (QAction *action : m_toolBar->actions()) {
++            const QString name = action->objectName();
++            if (name == QLatin1String("icons") || name == QLatin1String("compact") || name == QLatin1String("details")) {
++                if (QWidget *button = m_toolBar->widgetForAction(action)) {
++                    button->setProperty("finderOff", on);
++                    button->style()->unpolish(button);
++                    button->style()->polish(button);
++                    button->update();
++                }
++            }
++        }
++        m_toolBar->update();
++    }
++    if (on) {
++        attachColumns();
++    } else if (m_columns) {
++        m_columns->hide();
++        if (auto *window = qobject_cast<DolphinMainWindow *>(m_window)) {
++            if (DolphinViewContainer *container = window->activeViewContainer()) {
++                container->view()->setFocus();
++            }
++        }
++    }
++}
++
++void FinderChrome::attachColumns()
++{
++    auto *window = qobject_cast<DolphinMainWindow *>(m_window);
++    DolphinViewContainer *container = window ? window->activeViewContainer() : nullptr;
++    if (!container || !m_columnMode) {
++        return;
++    }
++    DolphinView *view = container->view();
++    if (!m_columns) {
++        m_columns = new FinderColumnView(view);
++        connect(m_columns, &FinderColumnView::folderActivated, this, [this](const QUrl &url) {
++            if (auto *window = qobject_cast<DolphinMainWindow *>(m_window)) {
++                if (DolphinViewContainer *container = window->activeViewContainer()) {
++                    container->setUrl(url);
++                }
++            }
++        });
++    }
++    if (m_columns->parentWidget() != view) {
++        m_columns->setParent(view);
++    }
++    view->removeEventFilter(this);
++    view->installEventFilter(this);
++    m_columns->setGeometry(view->rect());
++    m_columns->setRootUrl(container->url());
++    m_columns->show();
++    m_columns->raise();
++    m_columns->setFocus();
+ }
+ 
+ QIcon FinderChrome::groupIcon()
+@@ -505,7 +648,7 @@ void FinderChrome::paintCapsules(QPainter &p)
+     // the view modes, and search.
+     static const QList<QStringList> groups = {
+         {QStringLiteral("go_back"), QStringLiteral("go_forward")},
+-        {QStringLiteral("icons"), QStringLiteral("compact"), QStringLiteral("details")},
++        {QStringLiteral("icons"), QStringLiteral("compact"), QStringLiteral("details"), QStringLiteral("finder_columns")},
+         {QStringLiteral("group_by")},
+         {QStringLiteral("finder_more")},
+         {QStringLiteral("toggle_search")},
+@@ -717,6 +860,11 @@ bool FinderChrome::eventFilter(QObject *watched, QEvent *event)
+         return false;
+     }
+ 
++    if (m_columns && watched == m_columns->parentWidget() && event->type() == QEvent::Resize) {
++        m_columns->setGeometry(m_columns->parentWidget()->rect());
++        return false;
++    }
++
+     if (watched == m_title && event->type() == QEvent::MouseButtonPress) {
+         // Click the title to type a path.
+         if (m_navigator) {
+diff --git a/src/finder/finderchrome.h b/src/finder/finderchrome.h
+index b76c71647..8fef78d97 100644
+--- a/src/finder/finderchrome.h
++++ b/src/finder/finderchrome.h
+@@ -12,6 +12,7 @@
+ #include <QPointer>
+ #include <QRegion>
+ 
++class FinderColumnView;
+ class KWindowShadow;
+ class QMainWindow;
+ class QAction;
+@@ -52,6 +53,11 @@ private:
+     void updateTitle();
+     QToolButton *createMoreButton(QToolBar *toolBar);
+     static QIcon groupIcon();
++    static QIcon columnsIcon();
++    /** Finder's column view on or off (laid over the active Dolphin view). */
++    void setColumnMode(bool on);
++    void attachColumns();
++    void leaveColumnMode();
+     void updateTitleColor();
+     void updateLead();
+     void paintCapsules(QPainter &p);
+@@ -71,6 +77,9 @@ private:
+     QPointer<QWidget> m_lead; // spacer from the stoplights to the content edge
+     QPointer<QWidget> m_navigator; // the hidden breadcrumb
+     QPointer<QAction> m_navigatorAction;
++    QAction *m_columnsAction = nullptr;
++    QPointer<FinderColumnView> m_columns;
++    bool m_columnMode = false;
+     KWindowShadow *m_shadow = nullptr;
+     QRegion m_appliedBlur; // last blur region sent to KWin
+     bool m_blurApplied = false;
+diff --git a/src/finder/findercolumnview.cpp b/src/finder/findercolumnview.cpp
+new file mode 100644
+index 000000000..c95d57de6
+--- /dev/null
++++ b/src/finder/findercolumnview.cpp
+@@ -0,0 +1,245 @@
++/*
++ * SPDX-FileCopyrightText: 2026 Brhett
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "findercolumnview.h"
++
++#include <KDirLister>
++#include <KDirModel>
++#include <KDirSortFilterProxyModel>
++#include <KFileItem>
++#include <KIO/JobUiDelegateFactory>
++#include <KIO/OpenUrlJob>
++#include <KLocalizedString>
++
++#include <QApplication>
++#include <QLabel>
++#include <QListView>
++#include <QPainter>
++#include <QPainterPath>
++#include <QScrollBar>
++#include <QStyledItemDelegate>
++#include <QVBoxLayout>
++
++namespace
++{
++constexpr int RowHeight = 24;
++constexpr int IconSize = 16;
++constexpr int ColumnWidth = 230;
++
++const QColor Accent(0x0a, 0x84, 0xff);
++const QColor InactiveSelection(255, 255, 255, 46);
++const QColor Divider(255, 255, 255, 20);
++
++// Small icons are the full-color artwork scaled down; icon themes often ship
++// monochrome outlines at 16 px.
++QPixmap smallIcon(const QIcon &icon, qreal dpr)
++{
++    QPixmap pm = icon.pixmap(QSize(32, 32), dpr);
++    pm = pm.scaled(QSize(IconSize, IconSize) * dpr, Qt::KeepAspectRatio, Qt::SmoothTransformation);
++    pm.setDevicePixelRatio(dpr);
++    return pm;
++}
++
++/** One row: icon, name, and a chevron for folders; Finder's rounded selection. */
++class ColumnDelegate : public QStyledItemDelegate
++{
++public:
++    using QStyledItemDelegate::QStyledItemDelegate;
++
++    QSize sizeHint(const QStyleOptionViewItem &, const QModelIndex &) const override
++    {
++        return QSize(ColumnWidth, RowHeight);
++    }
++
++    void paint(QPainter *p, const QStyleOptionViewItem &option, const QModelIndex &index) const override
++    {
++        p->save();
++        p->setRenderHint(QPainter::Antialiasing);
++        const QRectF row = QRectF(option.rect).adjusted(6, 1, -6, -1);
++        const bool selected = option.state & QStyle::State_Selected;
++        // Blue in the column that has focus; the folders leading to it stay gray.
++        const bool focused = option.widget && option.widget->hasFocus() && option.widget->isActiveWindow();
++        if (selected) {
++            QPainterPath path;
++            path.addRoundedRect(row, 5, 5);
++            p->fillPath(path, focused ? Accent : InactiveSelection);
++        }
++
++        const qreal dpr = p->device() ? p->device()->devicePixelRatioF() : 1.0;
++        const QIcon icon = index.data(Qt::DecorationRole).value<QIcon>();
++        const int iconX = int(row.left()) + 6;
++        p->drawPixmap(QPoint(iconX, option.rect.top() + (option.rect.height() - IconSize) / 2), smallIcon(icon, dpr));
++
++        const bool isDir = index.data(KDirModel::FileItemRole).value<KFileItem>().isDir();
++        const int chevronSpace = isDir ? 18 : 6;
++        const QRect textRect(iconX + IconSize + 7, option.rect.top(), int(row.right()) - (iconX + IconSize + 7) - chevronSpace, option.rect.height());
++        p->setPen(selected && focused ? QColor(Qt::white) : QColor(255, 255, 255, 225));
++        p->setFont(option.font);
++        p->drawText(textRect,
++                    Qt::AlignVCenter | Qt::AlignLeft,
++                    option.fontMetrics.elidedText(index.data(Qt::DisplayRole).toString(), Qt::ElideMiddle, textRect.width()));
++
++        if (isDir) {
++            const QPointF c(row.right() - 10, row.center().y());
++            p->setPen(QPen(selected && focused ? QColor(255, 255, 255, 230) : QColor(255, 255, 255, 120), 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
++            p->drawPolyline(QPolygonF{c + QPointF(-1.5, -3.5), c + QPointF(2, 0), c + QPointF(-1.5, 3.5)});
++        }
++        p->restore();
++    }
++};
++}
++
++FinderColumnView::FinderColumnView(QWidget *parent)
++    : QColumnView(parent)
++    , m_model(new KDirModel(this))
++    , m_proxy(new KDirSortFilterProxyModel(this))
++{
++    m_proxy->setSourceModel(m_model);
++    m_proxy->setSortFoldersFirst(false); // Finder sorts folders and files together
++    m_proxy->setSortCaseSensitivity(Qt::CaseInsensitive);
++    m_proxy->sort(KDirModel::Name);
++    m_model->dirLister()->setAutoErrorHandlingEnabled(false);
++    setModel(m_proxy);
++
++    setItemDelegate(new ColumnDelegate(this));
++    setResizeGripsVisible(false);
++    setColumnWidths({ColumnWidth});
++    setFrameShape(QFrame::NoFrame);
++    setSelectionMode(QAbstractItemView::ExtendedSelection);
++    setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
++    // Opaque in the window's content color: it covers Dolphin's own view.
++    setStyleSheet(QStringLiteral("QColumnView { background: rgb(32, 32, 37); border: none; }"));
++
++    // Preview column for a selected file: big icon, name, kind and details.
++    m_preview = new QWidget;
++    auto *layout = new QVBoxLayout(m_preview);
++    layout->setContentsMargins(16, 24, 16, 16);
++    layout->setSpacing(6);
++    m_previewIcon = new QLabel;
++    m_previewIcon->setAlignment(Qt::AlignCenter);
++    m_previewName = new QLabel;
++    m_previewName->setAlignment(Qt::AlignCenter);
++    m_previewName->setWordWrap(true);
++    QFont bold = m_previewName->font();
++    bold.setWeight(QFont::DemiBold);
++    bold.setPointSizeF(bold.pointSizeF() * 1.1);
++    m_previewName->setFont(bold);
++    m_previewKind = new QLabel;
++    m_previewKind->setAlignment(Qt::AlignCenter);
++    m_previewKind->setStyleSheet(QStringLiteral("color: rgba(255, 255, 255, 140);"));
++    m_previewDetails = new QLabel;
++    m_previewDetails->setAlignment(Qt::AlignLeft | Qt::AlignTop);
++    m_previewDetails->setWordWrap(true);
++    m_previewDetails->setTextFormat(Qt::RichText);
++    layout->addWidget(m_previewIcon);
++    layout->addSpacing(6);
++    layout->addWidget(m_previewName);
++    layout->addWidget(m_previewKind);
++    layout->addSpacing(12);
++    layout->addWidget(m_previewDetails);
++    layout->addStretch(1);
++    m_preview->setMinimumWidth(260);
++    m_preview->setAttribute(Qt::WA_TranslucentBackground);
++    setPreviewWidget(m_preview);
++    connect(this, &QColumnView::updatePreviewWidget, this, &FinderColumnView::updatePreview);
++
++    connect(this, &QAbstractItemView::activated, this, &FinderColumnView::openIndex);
++}
++
++void FinderColumnView::setRootUrl(const QUrl &url)
++{
++    if (url == m_root) {
++        return;
++    }
++    m_root = url;
++    m_model->dirLister()->openUrl(url);
++    setRootIndex(QModelIndex());
++}
++
++QUrl FinderColumnView::rootUrl() const
++{
++    return m_root;
++}
++
++QAbstractItemView *FinderColumnView::createColumn(const QModelIndex &rootIndex)
++{
++    QAbstractItemView *column = QColumnView::createColumn(rootIndex);
++    column->setFrameShape(QFrame::NoFrame);
++    column->setAttribute(Qt::WA_TranslucentBackground);
++    column->viewport()->setAutoFillBackground(false);
++    // A hairline between columns, as in Finder.
++    column->setStyleSheet(QStringLiteral("QAbstractItemView { background: transparent; border: none;"
++                                         " border-right: 1px solid rgba(255, 255, 255, 20); }"));
++    column->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
++    if (auto *list = qobject_cast<QListView *>(column)) {
++        list->setUniformItemSizes(true);
++        list->setSpacing(0);
++    }
++    // Repaint the selection when focus moves between columns (blue ↔ gray).
++    column->installEventFilter(this);
++    return column;
++}
++
++bool FinderColumnView::eventFilter(QObject *watched, QEvent *event)
++{
++    // Columns don't repaint their selection when focus moves between them.
++    if (event->type() == QEvent::FocusIn || event->type() == QEvent::FocusOut) {
++        if (auto *column = qobject_cast<QAbstractItemView *>(watched)) {
++            column->viewport()->update();
++        }
++    }
++    return QColumnView::eventFilter(watched, event);
++}
++
++KFileItem FinderColumnView::itemAt(const QModelIndex &index) const
++{
++    return m_model->itemForIndex(m_proxy->mapToSource(index));
++}
++
++void FinderColumnView::openIndex(const QModelIndex &index)
++{
++    const KFileItem item = itemAt(index);
++    if (item.isNull()) {
++        return;
++    }
++    if (item.isDir()) {
++        Q_EMIT folderActivated(item.url());
++        return;
++    }
++    auto *job = new KIO::OpenUrlJob(item.targetUrl(), item.mimetype());
++    job->setUiDelegate(KIO::createDefaultJobUiDelegate(KJobUiDelegate::AutoHandlingEnabled, window()));
++    job->setShowOpenOrExecuteDialog(true);
++    job->start();
++}
++
++void FinderColumnView::updatePreview(const QModelIndex &index)
++{
++    const KFileItem item = itemAt(index);
++    if (item.isNull()) {
++        return;
++    }
++    const qreal dpr = devicePixelRatioF();
++    QPixmap icon = QIcon::fromTheme(item.iconName()).pixmap(QSize(128, 128), dpr);
++    m_previewIcon->setPixmap(icon);
++    m_previewName->setText(item.text());
++    m_previewKind->setText(item.isDir() ? i18nc("@info Finder preview", "Folder")
++                                        : i18nc("@info Finder preview: kind - size", "%1 – %2", item.mimeComment(), KIO::convertSize(item.size())));
++    const QLocale locale;
++    const auto row = [](const QString &label, const QString &value) {
++        return QStringLiteral("<tr><td style='color: rgba(255,255,255,0.55); padding-right: 10px;'>%1</td><td>%2</td></tr>")
++            .arg(label.toHtmlEscaped(), value.toHtmlEscaped());
++    };
++    QString html = QStringLiteral("<b>") + i18nc("@title Finder preview", "Information") + QStringLiteral("</b><table style='margin-top: 6px;'>");
++    const QDateTime created = item.time(KFileItem::CreationTime);
++    if (created.isValid()) {
++        html += row(i18nc("@label Finder preview", "Created"), locale.toString(created, QLocale::LongFormat));
++    }
++    html += row(i18nc("@label Finder preview", "Modified"), locale.toString(item.time(KFileItem::ModificationTime), QLocale::LongFormat));
++    html += QStringLiteral("</table>");
++    m_previewDetails->setText(html);
++}
++
++#include "moc_findercolumnview.cpp"
+diff --git a/src/finder/findercolumnview.h b/src/finder/findercolumnview.h
+new file mode 100644
+index 000000000..a2752983f
+--- /dev/null
++++ b/src/finder/findercolumnview.h
+@@ -0,0 +1,61 @@
++/*
++ * SPDX-FileCopyrightText: 2026 Brhett
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef FINDERCOLUMNVIEW_H
++#define FINDERCOLUMNVIEW_H
++
++#include <QColumnView>
++#include <QUrl>
++
++class KDirModel;
++class KDirSortFilterProxyModel;
++class KFileItem;
++class QLabel;
++
++/**
++ * @brief Finder's column view (Miller columns).
++ *
++ * Each column lists a folder; selecting a folder opens its contents in the
++ * next column, and selecting a file shows a preview column with its icon and
++ * details. Dolphin has no such mode, so Finder lays this view over the active
++ * Dolphin view while the column mode is on.
++ */
++class FinderColumnView : public QColumnView
++{
++    Q_OBJECT
++
++public:
++    explicit FinderColumnView(QWidget *parent = nullptr);
++
++    /** Shows @p url in the first column. */
++    void setRootUrl(const QUrl &url);
++    QUrl rootUrl() const;
++
++Q_SIGNALS:
++    /** A folder was double-clicked: the window should go there. */
++    void folderActivated(const QUrl &url);
++
++protected:
++    QAbstractItemView *createColumn(const QModelIndex &rootIndex) override;
++    bool eventFilter(QObject *watched, QEvent *event) override;
++
++private:
++    KFileItem itemAt(const QModelIndex &index) const;
++    void openIndex(const QModelIndex &index);
++    void updatePreview(const QModelIndex &index);
++
++    KDirModel *m_model;
++    KDirSortFilterProxyModel *m_proxy;
++    QUrl m_root;
++
++    QWidget *m_preview;
++    QLabel *m_previewIcon;
++    QLabel *m_previewName;
++    QLabel *m_previewKind;
++    QLabel *m_previewDetails;
++};
++
++#endif
+-- 
+2.56.0
+

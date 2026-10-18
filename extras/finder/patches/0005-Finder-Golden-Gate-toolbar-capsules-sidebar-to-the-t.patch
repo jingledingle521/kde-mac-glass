@@ -1,0 +1,331 @@
+From bb41d9ec705197efa009fab38bf07f85154bdacd Mon Sep 17 00:00:00 2001
+From: Brhett <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 10:16:30 -0500
+Subject: [PATCH 05/30] Finder: Golden Gate toolbar capsules, sidebar to the
+ top, zebra list rows
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ src/finder/finderchrome.cpp               | 124 ++++++++++++++++++++--
+ src/finder/finderchrome.h                 |   5 +
+ src/finder/findersidebar.cpp              |   6 +-
+ src/kitemviews/kitemlistwidget.cpp        |  12 ++-
+ src/settings/dolphin_generalsettings.kcfg |   4 +-
+ 5 files changed, 135 insertions(+), 16 deletions(-)
+
+diff --git a/src/finder/finderchrome.cpp b/src/finder/finderchrome.cpp
+index 5e21cc2ce..2e06b7d9e 100644
+--- a/src/finder/finderchrome.cpp
++++ b/src/finder/finderchrome.cpp
+@@ -40,6 +40,9 @@ const QColor ContentColor(30, 30, 32);
+ const QColor SidebarColor(44, 44, 48, 200); // translucent: KWin blurs behind it
+ const QColor HairlineDark(0, 0, 0, 140);
+ const QColor HairlineLight(255, 255, 255, 18);
++const QColor CapsuleFill(255, 255, 255, 20); // glass capsules behind toolbar buttons
++const QColor CapsuleRim(255, 255, 255, 26);
++constexpr int CapsuleHeight = 32;
+ 
+ // Box-blurs the alpha channel of a premultiplied ARGB image (three passes of
+ // a box blur approximate a Gaussian).
+@@ -266,6 +269,10 @@ void FinderChrome::setToolBar(QToolBar *toolBar)
+     // Let the window's own background (and rounded corners) show through.
+     toolBar->setAutoFillBackground(false);
+     toolBar->setStyleSheet(QStringLiteral("QToolBar { background: transparent; border: none; }"
++                                         "QToolButton { background: transparent; border: none; border-radius: 14px;"
++                                         " padding: 4px 7px; margin: 0px 1px; }"
++                                         "QToolButton:hover { background: rgba(255, 255, 255, 20); }"
++                                         "QToolButton:checked, QToolButton:pressed { background: rgba(255, 255, 255, 38); }"
+                                          "QToolButton::menu-indicator { image: none; width: 0; }"));
+     if (!m_stoplights) {
+         m_stoplights = new Stoplights(m_window);
+@@ -273,6 +280,12 @@ void FinderChrome::setToolBar(QToolBar *toolBar)
+     // The stoplights lead the toolbar, like the title bar on macOS.
+     const QList<QAction *> actions = toolBar->actions();
+     toolBar->insertWidget(actions.isEmpty() ? nullptr : actions.first(), m_stoplights);
++    // The stoplights sit over the sidebar; the rest of the toolbar starts
++    // where the content does.
++    m_lead = new QWidget(toolBar);
++    m_lead->setAttribute(Qt::WA_TransparentForMouseEvents);
++    toolBar->insertWidget(actions.isEmpty() ? nullptr : actions.first(), m_lead);
++    updateLead();
+ 
+     QAction *navigators = nullptr;
+     for (QAction *action : actions) {
+@@ -298,10 +311,10 @@ void FinderChrome::setToolBar(QToolBar *toolBar)
+     m_navigatorAction = navigators;
+     auto *title = new QLabel(toolBar);
+     QFont font = title->font();
+-    font.setWeight(QFont::Bold);
+-    font.setPointSizeF(font.pointSizeF() * 1.08);
++    font.setWeight(QFont::DemiBold);
++    font.setPointSizeF(font.pointSizeF() * 1.3);
+     title->setFont(font);
+-    title->setContentsMargins(10, 0, 10, 0);
++    title->setContentsMargins(12, 0, 12, 0);
+     title->setCursor(Qt::IBeamCursor);
+     title->installEventFilter(this);
+     m_title = title;
+@@ -330,6 +343,81 @@ void FinderChrome::updateTitle()
+         text = text.left(dash);
+     }
+     m_title->setText(text);
++    updateTitleColor();
++}
++
++void FinderChrome::updateTitleColor()
++{
++    if (!m_title) {
++        return;
++    }
++    // Bright when the window is active, gray when it's in the background.
++    QPalette pal = m_title->palette();
++    pal.setColor(QPalette::WindowText, m_window->isActiveWindow() ? QColor(255, 255, 255, 235) : QColor(255, 255, 255, 110));
++    m_title->setPalette(pal);
++}
++
++void FinderChrome::updateLead()
++{
++    if (!m_lead || !m_stoplights || !m_toolBar) {
++        return;
++    }
++    int width = 0;
++    if (m_sidebar && m_sidebar->isVisible()) {
++        const int sidebarRight = m_sidebar->mapTo(m_window, QPoint(m_sidebar->width(), 0)).x();
++        const int stoplightsRight = m_toolBar->mapTo(m_window, QPoint(0, 0)).x() + m_toolBar->contentsMargins().left()
++            + m_toolBar->layout()->contentsMargins().left() + m_stoplights->width();
++        width = std::max(0, sidebarRight + 6 - stoplightsRight);
++    }
++    if (m_lead->width() != width) {
++        m_lead->setFixedWidth(width);
++    }
++}
++
++void FinderChrome::paintCapsules(QPainter &p)
++{
++    // Finder groups toolbar buttons into glass capsules: back/forward,
++    // the view modes, and search.
++    static const QList<QStringList> groups = {
++        {QStringLiteral("go_back"), QStringLiteral("go_forward")},
++        {QStringLiteral("icons"), QStringLiteral("compact"), QStringLiteral("details")},
++        {QStringLiteral("toggle_search")},
++    };
++    p.setRenderHint(QPainter::Antialiasing);
++    for (const QStringList &group : groups) {
++        QRect box;
++        QList<QRect> parts;
++        for (QAction *action : m_toolBar->actions()) {
++            if (!group.contains(action->objectName()) || !action->isVisible()) {
++                continue;
++            }
++            QWidget *button = m_toolBar->widgetForAction(action);
++            if (button && button->isVisible()) {
++                parts.append(button->geometry());
++                box = box.united(button->geometry());
++            }
++        }
++        if (box.isEmpty()) {
++            continue;
++        }
++        QRectF capsule(box);
++        capsule.setTop(box.center().y() - CapsuleHeight / 2.0 + 0.5);
++        capsule.setHeight(CapsuleHeight);
++        capsule.adjust(-2, 0, 2, 0);
++        if (capsule.width() < capsule.height()) { // a lone round button
++            capsule.adjust(-(capsule.height() - capsule.width()) / 2, 0, (capsule.height() - capsule.width()) / 2, 0);
++        }
++        p.setPen(QPen(CapsuleRim, 1));
++        p.setBrush(CapsuleFill);
++        const qreal r = capsule.height() / 2;
++        p.drawRoundedRect(capsule.adjusted(0.5, 0.5, -0.5, -0.5), r, r);
++        if (group.first() == QLatin1String("go_back") && parts.size() == 2) {
++            // The thin divider between back and forward.
++            const qreal x = (parts[0].right() + parts[1].left() + 1) / 2.0;
++            p.setPen(QPen(CapsuleRim, 1));
++            p.drawLine(QPointF(x, capsule.top() + 8), QPointF(x, capsule.bottom() - 8));
++        }
++    }
+ }
+ 
+ void FinderChrome::watchNavigators()
+@@ -374,6 +462,9 @@ void FinderChrome::setSidebar(QWidget *sidebar)
+     m_sidebar = sidebar;
+     if (sidebar) {
+         sidebar->installEventFilter(this);
++        // Only the window paints the glass; the dock itself stays clear.
++        sidebar->setAutoFillBackground(false);
++        sidebar->setStyleSheet(QStringLiteral("QDockWidget { background: transparent; border: none; }"));
+     }
+     updateWindowEffects();
+ }
+@@ -477,6 +568,7 @@ bool FinderChrome::eventFilter(QObject *watched, QEvent *event)
+             if (m_stoplights) {
+                 m_stoplights->update();
+             }
++            updateTitleColor();
+             break;
+         default:
+             break;
+@@ -487,7 +579,11 @@ bool FinderChrome::eventFilter(QObject *watched, QEvent *event)
+     if (watched == m_sidebar) {
+         if (event->type() == QEvent::Resize || event->type() == QEvent::Move || event->type() == QEvent::Show || event->type() == QEvent::Hide) {
+             updateWindowEffects();
++            updateLead();
+             m_window->update();
++            if (m_toolBar) {
++                m_toolBar->update();
++            }
+         }
+         return false;
+     }
+@@ -524,7 +620,18 @@ bool FinderChrome::eventFilter(QObject *watched, QEvent *event)
+             p.translate(-offset);
+             p.setClipPath(roundedPath(window, radius()));
+             p.setCompositionMode(QPainter::CompositionMode_Source);
+-            p.fillRect(QRectF(offset, QSizeF(m_toolBar->size())), ContentColor);
++            const QRectF strip(offset, QSizeF(m_toolBar->size()));
++            p.fillRect(strip, ContentColor);
++            // The glass sidebar runs all the way up behind the stoplights.
++            if (m_sidebar && m_sidebar->isVisible()) {
++                const int right = m_sidebar->mapTo(m_window, QPoint(m_sidebar->width(), 0)).x();
++                p.fillRect(QRectF(0, strip.top(), right, strip.height()), SidebarColor);
++                p.setCompositionMode(QPainter::CompositionMode_SourceOver);
++                p.fillRect(QRectF(right, strip.top(), 1, strip.height()), HairlineDark);
++            }
++            p.setCompositionMode(QPainter::CompositionMode_SourceOver);
++            p.resetTransform();
++            paintCapsules(p);
+             return false; // the toolbar still draws its buttons
+         }
+         // Empty toolbar space works like a title bar.
+@@ -608,18 +715,13 @@ void FinderChrome::paintBackground()
+     // hairline separates it from the content.
+     if (m_sidebar && m_sidebar->isVisible()) {
+         const QRect s(m_sidebar->mapTo(m_window, QPoint(0, 0)), m_sidebar->size());
+-        const QRectF strip(0, s.top(), s.right() + 1, r.height() - s.top());
++        const QRectF strip(0, 0, s.right() + 1, r.height());
+         p.setCompositionMode(QPainter::CompositionMode_Source);
+         p.fillRect(strip, SidebarColor);
+         p.setCompositionMode(QPainter::CompositionMode_SourceOver);
+         p.fillRect(QRectF(strip.right(), strip.top(), 1, strip.height()), HairlineDark);
+     }
+ 
+-    // Toolbar: a hairline under the uniform top bar.
+-    if (m_toolBar && m_toolBar->isVisible()) {
+-        const qreal y = m_toolBar->mapTo(m_window, QPoint(0, m_toolBar->height())).y();
+-        p.fillRect(QRectF(0, y - 1, r.width(), 1), HairlineDark);
+-    }
+ 
+     // Light inner edge around the whole window, like macOS's window border.
+     p.setClipping(false);
+@@ -639,7 +741,7 @@ void FinderChrome::updateWindowEffects()
+     QRegion blur;
+     if (m_sidebar && m_sidebar->isVisible()) {
+         const QRect s(m_sidebar->mapTo(m_window, QPoint(0, 0)), m_sidebar->size());
+-        const QRect strip(0, s.top(), s.right() + 1, m_window->height() - s.top());
++        const QRect strip(0, 0, s.right() + 1, m_window->height());
+         // Keep the blur inside the rounded corner.
+         const QPolygon shape = roundedPath(QRectF(m_window->rect()), radius()).toFillPolygon().toPolygon();
+         blur = QRegion(strip).intersected(QRegion(shape));
+diff --git a/src/finder/finderchrome.h b/src/finder/finderchrome.h
+index be441db16..cbaae7165 100644
+--- a/src/finder/finderchrome.h
++++ b/src/finder/finderchrome.h
+@@ -14,6 +14,7 @@ class KWindowShadow;
+ class QMainWindow;
+ class QAction;
+ class QLabel;
++class QPainter;
+ class QToolBar;
+ class QWidget;
+ 
+@@ -46,6 +47,9 @@ protected:
+ private:
+     void paintBackground();
+     void updateTitle();
++    void updateTitleColor();
++    void updateLead();
++    void paintCapsules(QPainter &p);
+     void watchNavigators();
+     void updateNavigatorVisibility();
+     void updateWindowEffects();
+@@ -59,6 +63,7 @@ private:
+     QPointer<QWidget> m_sidebar;
+     QPointer<QWidget> m_stoplights;
+     QPointer<QLabel> m_title;
++    QPointer<QWidget> m_lead; // spacer from the stoplights to the content edge
+     QPointer<QWidget> m_navigator; // the hidden breadcrumb
+     QPointer<QAction> m_navigatorAction;
+     KWindowShadow *m_shadow = nullptr;
+diff --git a/src/finder/findersidebar.cpp b/src/finder/findersidebar.cpp
+index 8ab651980..18db2879f 100644
+--- a/src/finder/findersidebar.cpp
++++ b/src/finder/findersidebar.cpp
+@@ -153,6 +153,7 @@ FinderSidebar::FinderSidebar(KFilePlacesModel *places, QWidget *parent)
+ 
+ void FinderSidebar::rebuild()
+ {
++    QList<QStandardItem *> top; // Recents, above the first heading
+     QList<QStandardItem *> favorites;
+     QList<QStandardItem *> locations;
+     QStandardItem *trash = nullptr;
+@@ -184,7 +185,7 @@ void FinderSidebar::rebuild()
+         if (url.scheme() == QLatin1String("trash")) {
+             trash = item;
+         } else if (group == KFilePlacesModel::RecentlySavedType) {
+-            favorites.prepend(item);
++            top.append(item);
+         } else if (group == KFilePlacesModel::PlacesType) {
+             favorites.append(item);
+         } else {
+@@ -202,6 +203,9 @@ void FinderSidebar::rebuild()
+         item->setFlags(Qt::NoItemFlags);
+         m_model->appendRow(item);
+     };
++    for (auto *item : std::as_const(top)) {
++        m_model->appendRow(item);
++    }
+     if (!favorites.isEmpty()) {
+         header(i18nc("@title Finder sidebar section", "Favorites"));
+         for (auto *item : std::as_const(favorites)) {
+diff --git a/src/kitemviews/kitemlistwidget.cpp b/src/kitemviews/kitemlistwidget.cpp
+index e792844b0..c1dbb3cef 100644
+--- a/src/kitemviews/kitemlistwidget.cpp
++++ b/src/kitemviews/kitemlistwidget.cpp
+@@ -117,8 +117,16 @@ void KItemListWidget::paint(QPainter *painter, const QStyleOptionGraphicsItem *o
+             }
+         }
+ 
+-        const QRectF backgroundRect(0, 0, size().width(), size().height());
+-        painter->fillRect(backgroundRect, backgroundColor);
++        // Finder: rounded stripes inset from the view edges.
++        const QRectF backgroundRect(8, 0, size().width() - 16, size().height());
++        const bool dark = m_styleOption.palette.color(QPalette::Window).lightnessF() < 0.5;
++        backgroundColor = dark ? QColor(255, 255, 255, 14) : QColor(0, 0, 0, 10);
++        painter->save();
++        painter->setRenderHint(QPainter::Antialiasing);
++        painter->setPen(Qt::NoPen);
++        painter->setBrush(backgroundColor);
++        painter->drawRoundedRect(backgroundRect, 6, 6);
++        painter->restore();
+     }
+ 
+     const QStyle::State selectedState(m_selected ? QStyle::State_Selected : QStyle::State(0));
+diff --git a/src/settings/dolphin_generalsettings.kcfg b/src/settings/dolphin_generalsettings.kcfg
+index 7a849d4c6..fd25f4774 100644
+--- a/src/settings/dolphin_generalsettings.kcfg
++++ b/src/settings/dolphin_generalsettings.kcfg
+@@ -146,8 +146,8 @@
+                 <choice name="Disabled" />
+             </choices>
+             <label>Statusbar</label>
+-            <!-- Finder: Golden Gate shows no status line by default. -->
+-            <default>2</default>
++            <!-- Finder: a small status line, like Finder's footer. -->
++            <default>0</default>
+             <emit signal="showStatusBarChanged" />
+         </entry>
+         <entry name="ShowZoomSlider" type="Bool">
+-- 
+2.56.0
+

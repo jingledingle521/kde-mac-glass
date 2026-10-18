@@ -1,0 +1,370 @@
+From 83f335a3651e853d10a64cb45b1a49f6c13eb597 Mon Sep 17 00:00:00 2001
+From: Brhett <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 09:40:52 -0500
+Subject: [PATCH 01/30] Finder: rebrand Dolphin as a separate app
+
+Own name, executable (finder), settings (finderrc), XMLGUI component,
+D-Bus names and desktop file id, so it runs beside the system Dolphin.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ finder-extras/org.brhett.finder.desktop              | 12 ++++++++++++
+ src/CMakeLists.txt                                   |  2 ++
+ src/dbusinterface.cpp                                |  4 ++--
+ src/dolphin.qrc                                      |  6 +++---
+ src/dolphinmainwindow.cpp                            |  2 +-
+ src/global.cpp                                       |  2 +-
+ src/main.cpp                                         | 11 +++++++----
+ src/panels/folders/dolphin_folderspanelsettings.kcfg |  2 +-
+ .../dolphin_informationpanelsettings.kcfg            |  2 +-
+ src/panels/places/dolphin_placespanelsettings.kcfg   |  2 +-
+ src/search/dolphin_searchsettings.kcfg               |  2 +-
+ ...in_25.04_update_statusandlocationbarssettings.cpp |  2 +-
+ src/settings/dolphin_compactmodesettings.kcfg        |  2 +-
+ src/settings/dolphin_contentdisplaysettings.kcfg     |  2 +-
+ src/settings/dolphin_contextmenusettings.kcfg        |  2 +-
+ src/settings/dolphin_detailsmodesettings.kcfg        |  2 +-
+ src/settings/dolphin_generalsettings.kcfg            |  2 +-
+ src/settings/dolphin_iconsmodesettings.kcfg          |  2 +-
+ src/settings/dolphin_update_splitviewsettings.cpp    |  2 +-
+ src/settings/dolphin_versioncontrolsettings.kcfg     |  2 +-
+ src/settings/interface/folderstabssettingspage.cpp   |  2 +-
+ src/settings/viewpropertiesdialog.cpp                |  2 +-
+ 22 files changed, 43 insertions(+), 26 deletions(-)
+ create mode 100644 finder-extras/org.brhett.finder.desktop
+
+diff --git a/finder-extras/org.brhett.finder.desktop b/finder-extras/org.brhett.finder.desktop
+new file mode 100644
+index 000000000..8b2c72eff
+--- /dev/null
++++ b/finder-extras/org.brhett.finder.desktop
+@@ -0,0 +1,12 @@
++[Desktop Entry]
++Type=Application
++Name=Finder
++GenericName=File Manager
++Comment=Browse and manage your files
++Exec=/home/brhett/.local/opt/finder/bin/finder %u
++Icon=system-file-manager
++Terminal=false
++Categories=Qt;KDE;System;FileTools;FileManager;
++MimeType=inode/directory;
++StartupWMClass=finder
++Keywords=files;file manager;finder;browse;
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 319c5512b..94a8b83f7 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -509,6 +509,8 @@ if (HAVE_KUSERFEEDBACK)
+ endif()
+ 
+ add_executable(dolphin)
++# Finder: install the program as "finder" so it sits beside the system Dolphin.
++set_target_properties(dolphin PROPERTIES OUTPUT_NAME finder)
+ 
+ target_sources(dolphin PRIVATE
+     dbusinterface.cpp
+diff --git a/src/dbusinterface.cpp b/src/dbusinterface.cpp
+index 18544493c..0d365a176 100644
+--- a/src/dbusinterface.cpp
++++ b/src/dbusinterface.cpp
+@@ -32,7 +32,7 @@ void DBusInterface::ShowFolders(const QStringList &uriList, const QString &start
+     if (urls.isEmpty()) {
+         return;
+     }
+-    const auto serviceName = isDaemon() ? QString() : QStringLiteral("org.kde.dolphin-%1").arg(QCoreApplication::applicationPid());
++    const auto serviceName = isDaemon() ? QString() : QStringLiteral("org.brhett.finder-%1").arg(QCoreApplication::applicationPid());
+     if (!Dolphin::attachToExistingInstance(urls, false, GeneralSettings::splitView(), serviceName, startUpId)) {
+         Dolphin::openNewWindow(urls);
+     }
+@@ -44,7 +44,7 @@ void DBusInterface::ShowItems(const QStringList &uriList, const QString &startUp
+     if (urls.isEmpty()) {
+         return;
+     }
+-    const auto serviceName = isDaemon() ? QString() : QStringLiteral("org.kde.dolphin-%1").arg(QCoreApplication::applicationPid());
++    const auto serviceName = isDaemon() ? QString() : QStringLiteral("org.brhett.finder-%1").arg(QCoreApplication::applicationPid());
+     if (!Dolphin::attachToExistingInstance(urls, true, GeneralSettings::splitView(), serviceName, startUpId)) {
+         Dolphin::openNewWindow(urls, nullptr, Dolphin::OpenNewWindowFlag::Select);
+     };
+diff --git a/src/dolphin.qrc b/src/dolphin.qrc
+index bd32ef734..d292a7dfa 100644
+--- a/src/dolphin.qrc
++++ b/src/dolphin.qrc
+@@ -1,6 +1,6 @@
+ <RCC>
+-<qresource prefix="/kxmlgui5/dolphin">
+-<file>dolphinui.rc</file>
+-<file>dolphinuiforphones.rc</file>
++<qresource prefix="/kxmlgui5/finder">
++<file alias="finderui.rc">dolphinui.rc</file>
++<file alias="finderuiforphones.rc">dolphinuiforphones.rc</file>
+ </qresource>
+ </RCC>
+diff --git a/src/dolphinmainwindow.cpp b/src/dolphinmainwindow.cpp
+index a29fe0df3..6cea067f5 100644
+--- a/src/dolphinmainwindow.cpp
++++ b/src/dolphinmainwindow.cpp
+@@ -210,7 +210,7 @@ DolphinMainWindow::DolphinMainWindow()
+     setupFileItemActions();
+ 
+     const bool usePhoneUi{KRuntimePlatform::runtimePlatform().contains(QLatin1String("phone"))};
+-    setupGUI(Save | Create | ToolBar, usePhoneUi ? QStringLiteral("dolphinuiforphones.rc") : QString() /* load the default dolphinui.rc file */);
++    setupGUI(Save | Create | ToolBar, usePhoneUi ? QStringLiteral("finderuiforphones.rc") : QString() /* load the default dolphinui.rc file */);
+     stateChanged(QStringLiteral("new_file"));
+ 
+     QClipboard *clipboard = QApplication::clipboard();
+diff --git a/src/global.cpp b/src/global.cpp
+index b32549102..fd9f4a581 100644
+--- a/src/global.cpp
++++ b/src/global.cpp
+@@ -153,7 +153,7 @@ QVector<QPair<QSharedPointer<OrgKdeDolphinMainWindowInterface>, QStringList>> Do
+     QDBusConnectionInterface *sessionInterface = QDBusConnection::sessionBus().interface();
+     const QStringList dbusServices = sessionInterface ? sessionInterface->registeredServiceNames().value() : QStringList();
+     // Don't match the service without trailing "-" (unique instance)
+-    const QString pattern = QStringLiteral("org.kde.dolphin-");
++    const QString pattern = QStringLiteral("org.brhett.finder-");
+     // Don't match the pid without leading "-"
+     const QString myPid = QLatin1Char('-') + QString::number(QCoreApplication::applicationPid());
+     for (const QString &service : dbusServices) {
+diff --git a/src/main.cpp b/src/main.cpp
+index 3c89f98a9..875ba922a 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -73,7 +73,7 @@ int main(int argc, char **argv)
+     KIconTheme::initTheme();
+ 
+     QApplication app(argc, argv);
+-    app.setWindowIcon(QIcon::fromTheme(QStringLiteral("org.kde.dolphin"), app.windowIcon()));
++    app.setWindowIcon(QIcon::fromTheme(QStringLiteral("system-file-manager"), app.windowIcon()));
+ 
+ #if HAVE_STYLE_MANAGER
+     /**
+@@ -92,8 +92,10 @@ int main(int argc, char **argv)
+ 
+     KLocalizedString::setApplicationDomain(dolphinTranslationDomain);
+ 
+-    KAboutData aboutData(QStringLiteral("dolphin"),
+-                         i18n("Dolphin"),
++    // Finder: a macOS-style build of Dolphin with its own name, settings
++    // (finderrc) and launcher, so it never collides with the system Dolphin.
++    KAboutData aboutData(QStringLiteral("finder"),
++                         QStringLiteral("Finder"),
+                          QStringLiteral(DOLPHIN_VERSION_STRING),
+                          i18nc("@title", "File Manager"),
+                          KAboutLicense::GPL,
+@@ -126,6 +128,7 @@ int main(int argc, char **argv)
+     aboutData.addAuthor(i18nc("@info:credit", "Max Blazejak"), i18nc("@info:credit", "Developer"), QStringLiteral("m43ksrocks@gmail.com"));
+     aboutData.addAuthor(i18nc("@info:credit", "Michael Austin"), i18nc("@info:credit", "Documentation"), QStringLiteral("tuxedup@users.sourceforge.net"));
+ 
++    aboutData.setDesktopFileName(QStringLiteral("org.brhett.finder"));
+     KAboutData::setApplicationData(aboutData);
+     KCrash::initialize();
+ 
+@@ -246,7 +249,7 @@ int main(int argc, char **argv)
+     // 3. There is a session available to restore
+     if (app.isSessionRestored() || GeneralSettings::rememberOpenedTabs()) {
+         // Get saved state data for the last-closed Dolphin instance
+-        const QString serviceName = QStringLiteral("org.kde.dolphin-%1").arg(QCoreApplication::applicationPid());
++        const QString serviceName = QStringLiteral("org.brhett.finder-%1").arg(QCoreApplication::applicationPid());
+         const auto instancesCount = Dolphin::dolphinGuiInstances(serviceName).size();
+         if (instancesCount == 1 || (app.isSessionRestored() && instancesCount > 0)) {
+             const QString className = KXmlGuiWindow::classNameOfToplevel(1);
+diff --git a/src/panels/folders/dolphin_folderspanelsettings.kcfg b/src/panels/folders/dolphin_folderspanelsettings.kcfg
+index d7d479fa1..ac843ca9e 100644
+--- a/src/panels/folders/dolphin_folderspanelsettings.kcfg
++++ b/src/panels/folders/dolphin_folderspanelsettings.kcfg
+@@ -4,7 +4,7 @@
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="http://www.kde.org/standards/kcfg/1.0
+       http://www.kde.org/standards/kcfg/1.0/kcfg.xsd">
+-    <kcfgfile name="dolphinrc"/>
++    <kcfgfile name="finderrc"/>
+     <group name="FoldersPanel">
+         <entry name="HiddenFilesShown" type="Bool">
+             <label>Hidden files shown</label>
+diff --git a/src/panels/information/dolphin_informationpanelsettings.kcfg b/src/panels/information/dolphin_informationpanelsettings.kcfg
+index 0f34e7310..65e8e73be 100644
+--- a/src/panels/information/dolphin_informationpanelsettings.kcfg
++++ b/src/panels/information/dolphin_informationpanelsettings.kcfg
+@@ -4,7 +4,7 @@
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="http://www.kde.org/standards/kcfg/1.0
+       http://www.kde.org/standards/kcfg/1.0/kcfg.xsd">
+-    <kcfgfile name="dolphinrc"/>
++    <kcfgfile name="finderrc"/>
+     <group name="InformationPanel">
+         <entry name="previewsShown" type="Bool">
+             <label>Previews shown</label>
+diff --git a/src/panels/places/dolphin_placespanelsettings.kcfg b/src/panels/places/dolphin_placespanelsettings.kcfg
+index 58f77a959..f2cda6506 100644
+--- a/src/panels/places/dolphin_placespanelsettings.kcfg
++++ b/src/panels/places/dolphin_placespanelsettings.kcfg
+@@ -5,7 +5,7 @@
+       xsi:schemaLocation="http://www.kde.org/standards/kcfg/1.0
+       http://www.kde.org/standards/kcfg/1.0/kcfg.xsd">
+     <include>kiconloader.h</include>
+-    <kcfgfile name="dolphinrc"/>
++    <kcfgfile name="finderrc"/>
+     <group name="PlacesPanel">
+         <entry name="IconSize" type="Int">
+             <label>Size of icons in the Places Panel (-1 means "automatic")</label>
+diff --git a/src/search/dolphin_searchsettings.kcfg b/src/search/dolphin_searchsettings.kcfg
+index 59e6f58e3..f018a036b 100644
+--- a/src/search/dolphin_searchsettings.kcfg
++++ b/src/search/dolphin_searchsettings.kcfg
+@@ -4,7 +4,7 @@
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="http://www.kde.org/standards/kcfg/1.0
+       http://www.kde.org/standards/kcfg/1.0/kcfg.xsd">
+-    <kcfgfile name="dolphinrc"/>
++    <kcfgfile name="finderrc"/>
+     <group name="Search">
+         <entry name="Location" type="String">
+             <label>Location</label>
+diff --git a/src/settings/dolphin_25.04_update_statusandlocationbarssettings.cpp b/src/settings/dolphin_25.04_update_statusandlocationbarssettings.cpp
+index 2188fcb82..7fc7d0a16 100644
+--- a/src/settings/dolphin_25.04_update_statusandlocationbarssettings.cpp
++++ b/src/settings/dolphin_25.04_update_statusandlocationbarssettings.cpp
+@@ -10,7 +10,7 @@
+ int main()
+ {
+     const auto showStatusBar = QStringLiteral("ShowStatusBar");
+-    auto config = KSharedConfig::openConfig(QStringLiteral("dolphinrc"));
++    auto config = KSharedConfig::openConfig(QStringLiteral("finderrc"));
+ 
+     KConfigGroup general = config->group(QStringLiteral("General"));
+     if (!general.hasKey(showStatusBar)) {
+diff --git a/src/settings/dolphin_compactmodesettings.kcfg b/src/settings/dolphin_compactmodesettings.kcfg
+index 3eda1b3d7..506e5ccd6 100644
+--- a/src/settings/dolphin_compactmodesettings.kcfg
++++ b/src/settings/dolphin_compactmodesettings.kcfg
+@@ -6,7 +6,7 @@
+       http://www.kde.org/standards/kcfg/1.0/kcfg.xsd">
+     <include>QFontDatabase</include>
+     <include>kiconloader.h</include>
+-    <kcfgfile name="dolphinrc"/>
++    <kcfgfile name="finderrc"/>
+     <group name="CompactMode">
+         <entry name="UseSystemFont" type="Bool">
+             <label>Use system font</label>
+diff --git a/src/settings/dolphin_contentdisplaysettings.kcfg b/src/settings/dolphin_contentdisplaysettings.kcfg
+index 6e8f8e9d5..dce1c2000 100644
+--- a/src/settings/dolphin_contentdisplaysettings.kcfg
++++ b/src/settings/dolphin_contentdisplaysettings.kcfg
+@@ -4,7 +4,7 @@
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="http://www.kde.org/standards/kcfg/1.0
+       http://www.kde.org/standards/kcfg/1.0/kcfg.xsd">
+-    <kcfgfile name="dolphinrc"/>
++    <kcfgfile name="finderrc"/>
+     <group name="ContentDisplay">
+         <entry name="DirectorySizeMode" type="Enum">
+             <label>How we display the size of directories</label>
+diff --git a/src/settings/dolphin_contextmenusettings.kcfg b/src/settings/dolphin_contextmenusettings.kcfg
+index 6e45d9bcd..a8774f9fa 100644
+--- a/src/settings/dolphin_contextmenusettings.kcfg
++++ b/src/settings/dolphin_contextmenusettings.kcfg
+@@ -4,7 +4,7 @@
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="http://www.kde.org/standards/kcfg/1.0
+       http://www.kde.org/standards/kcfg/1.0/kcfg.xsd">
+-    <kcfgfile name="dolphinrc"/>
++    <kcfgfile name="finderrc"/>
+     <group name="ContextMenu">
+         <entry name="ShowCopyMoveMenu" type="Bool">
+             <label>Show 'Copy To' and 'Move To' commands in context menu</label>
+diff --git a/src/settings/dolphin_detailsmodesettings.kcfg b/src/settings/dolphin_detailsmodesettings.kcfg
+index 52d85fa12..59e36d8c3 100644
+--- a/src/settings/dolphin_detailsmodesettings.kcfg
++++ b/src/settings/dolphin_detailsmodesettings.kcfg
+@@ -6,7 +6,7 @@
+       http://www.kde.org/standards/kcfg/1.0/kcfg.xsd">
+     <include>kiconloader.h</include>
+     <include>QFontDatabase</include>
+-    <kcfgfile name="dolphinrc"/>
++    <kcfgfile name="finderrc"/>
+     <group name="DetailsMode">
+         <entry name="ViewFont" type="Font">
+             <default code="true">QFont()</default>
+diff --git a/src/settings/dolphin_generalsettings.kcfg b/src/settings/dolphin_generalsettings.kcfg
+index b29526d64..40ee1deaf 100644
+--- a/src/settings/dolphin_generalsettings.kcfg
++++ b/src/settings/dolphin_generalsettings.kcfg
+@@ -7,7 +7,7 @@
+     <include>QDir</include>
+     <include>QUrl</include>
+     <include>KCompletion</include>
+-    <kcfgfile name="dolphinrc"/>
++    <kcfgfile name="finderrc"/>
+     <signal name="tabBarChanged" />
+     <signal name="sortingChoiceChanged" />
+     <signal name="splitViewChanged" />
+diff --git a/src/settings/dolphin_iconsmodesettings.kcfg b/src/settings/dolphin_iconsmodesettings.kcfg
+index 7948af75d..eec2b8536 100644
+--- a/src/settings/dolphin_iconsmodesettings.kcfg
++++ b/src/settings/dolphin_iconsmodesettings.kcfg
+@@ -6,7 +6,7 @@
+       http://www.kde.org/standards/kcfg/1.0/kcfg.xsd">
+     <include>QFontDatabase</include>
+     <include>kiconloader.h</include>
+-    <kcfgfile name="dolphinrc"/>
++    <kcfgfile name="finderrc"/>
+     <group name="IconsMode">
+         <entry name="UseSystemFont" type="Bool">
+             <label>Use system font</label>
+diff --git a/src/settings/dolphin_update_splitviewsettings.cpp b/src/settings/dolphin_update_splitviewsettings.cpp
+index f208d3d2f..71d197f19 100644
+--- a/src/settings/dolphin_update_splitviewsettings.cpp
++++ b/src/settings/dolphin_update_splitviewsettings.cpp
+@@ -9,7 +9,7 @@ int main()
+ {
+     const auto closeActiveSplitView = QStringLiteral("CloseActiveSplitView");
+     const auto closeSplitViewChoice = QStringLiteral("CloseSplitViewChoice");
+-    auto config = KSharedConfig::openConfig(QStringLiteral("dolphinrc"));
++    auto config = KSharedConfig::openConfig(QStringLiteral("finderrc"));
+ 
+     KConfigGroup general = config->group(QStringLiteral("General"));
+     if (!general.hasKey(closeActiveSplitView)) {
+diff --git a/src/settings/dolphin_versioncontrolsettings.kcfg b/src/settings/dolphin_versioncontrolsettings.kcfg
+index 89eb45b65..dca79096b 100644
+--- a/src/settings/dolphin_versioncontrolsettings.kcfg
++++ b/src/settings/dolphin_versioncontrolsettings.kcfg
+@@ -4,7 +4,7 @@
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="http://www.kde.org/standards/kcfg/1.0
+       http://www.kde.org/standards/kcfg/1.0/kcfg.xsd">
+-    <kcfgfile name="dolphinrc"/>
++    <kcfgfile name="finderrc"/>
+     <group name="VersionControl">
+         <entry name="enabledPlugins" type="StringList">
+             <label>Enabled plugins</label>
+diff --git a/src/settings/interface/folderstabssettingspage.cpp b/src/settings/interface/folderstabssettingspage.cpp
+index fa1b1b80f..2512c5c85 100644
+--- a/src/settings/interface/folderstabssettingspage.cpp
++++ b/src/settings/interface/folderstabssettingspage.cpp
+@@ -214,7 +214,7 @@ void FoldersTabsSettingsPage::applySettings()
+ 
+     // Remove saved state if "remember open tabs" has been turned off
+     if (!m_rememberOpenedTabsRadioButton->isChecked()) {
+-        KConfigGroup windowState{KSharedConfig::openConfig(QStringLiteral("dolphinrc")), QStringLiteral("WindowState")};
++        KConfigGroup windowState{KSharedConfig::openConfig(QStringLiteral("finderrc")), QStringLiteral("WindowState")};
+         if (windowState.exists()) {
+             windowState.deleteGroup();
+         }
+diff --git a/src/settings/viewpropertiesdialog.cpp b/src/settings/viewpropertiesdialog.cpp
+index c84fe64ae..6199f550a 100644
+--- a/src/settings/viewpropertiesdialog.cpp
++++ b/src/settings/viewpropertiesdialog.cpp
+@@ -209,7 +209,7 @@ ViewPropertiesDialog::ViewPropertiesDialog(DolphinView *dolphinView)
+     });
+ 
+     // clean up old window geometry settings
+-    KSharedConfig::openConfig(QStringLiteral("dolphinrc"))->deleteGroup(QStringLiteral("ViewPropertiesDialog"));
++    KSharedConfig::openConfig(QStringLiteral("finderrc"))->deleteGroup(QStringLiteral("ViewPropertiesDialog"));
+ 
+     loadSettings();
+ }
+-- 
+2.56.0
+

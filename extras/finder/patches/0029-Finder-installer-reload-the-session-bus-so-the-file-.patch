@@ -1,0 +1,28 @@
+From 69f298d0eccade5c2d28a8a0ba47da6bb3c5f011 Mon Sep 17 00:00:00 2001
+From: Brhett <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 15:20:15 -0500
+Subject: [PATCH 29/30] Finder installer: reload the session bus so the file
+ chooser can start
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ finder-extras/install.sh | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/finder-extras/install.sh b/finder-extras/install.sh
+index 5415b95d7..2f26cb6d5 100755
+--- a/finder-extras/install.sh
++++ b/finder-extras/install.sh
+@@ -51,6 +51,8 @@ if ! cmp -s "$root/finder-extras/finder.portal" "$portal"; then
+     pkexec install -m 644 "$root/finder-extras/finder.portal" "$portal" \
+         || echo "Skipped the Finder file chooser: $portal needs installing as root."
+ fi
++# The session bus only notices the new D-Bus service file after a reload.
++busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus ReloadConfig >/dev/null 2>&1 || true
+ systemctl --user restart xdg-desktop-portal.service 2>/dev/null || true
+ 
+ echo "Finder installed. Launch it from the app menu, or: $prefix/bin/finder"
+-- 
+2.56.0
+

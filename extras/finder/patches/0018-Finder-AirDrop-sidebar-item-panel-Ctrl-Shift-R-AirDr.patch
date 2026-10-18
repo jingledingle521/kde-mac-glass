@@ -1,0 +1,843 @@
+From 8bc856322d026cb3a6f37cd19cb8c90413c07b9a Mon Sep 17 00:00:00 2001
+From: Brhett <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 12:55:02 -0500
+Subject: [PATCH 18/30] =?UTF-8?q?Finder:=20AirDrop=20(sidebar=20item,=20pa?=
+ =?UTF-8?q?nel,=20Ctrl+Shift+R,=20AirDrop=E2=80=A6=20in=20the=20actions=20?=
+ =?UTF-8?q?menu)=20via=20omdrop?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Nearby devices come from omdrop peers -n --json; drop files on a device or
+click it to send. Discovery uses omdrop on/off, and the panel warns that
+Wi-Fi drops while AirDrop is on (omdrop-owl takes Intel cards over).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ src/CMakeLists.txt           |   1 +
+ src/finder/finderairdrop.cpp | 440 +++++++++++++++++++++++++++++++++++
+ src/finder/finderairdrop.h   |  83 +++++++
+ src/finder/finderchrome.cpp  |  95 +++++++-
+ src/finder/finderchrome.h    |   8 +
+ src/finder/findersidebar.cpp |  19 +-
+ src/finder/findersidebar.h   |   5 +
+ 7 files changed, 647 insertions(+), 4 deletions(-)
+ create mode 100644 src/finder/finderairdrop.cpp
+ create mode 100644 src/finder/finderairdrop.h
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index f1efb5204..af5e3a0c2 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -288,6 +288,7 @@ target_sources(dolphinstatic PRIVATE
+     finder/finderchrome.cpp
+     finder/findersidebar.cpp
+     finder/findercolumnview.cpp
++    finder/finderairdrop.cpp
+     admin/bar.cpp
+     admin/workerintegration.cpp
+     animatedheightwidget.cpp
+diff --git a/src/finder/finderairdrop.cpp b/src/finder/finderairdrop.cpp
+new file mode 100644
+index 000000000..baeff5075
+--- /dev/null
++++ b/src/finder/finderairdrop.cpp
+@@ -0,0 +1,440 @@
++/*
++ * SPDX-FileCopyrightText: 2026 Brhett
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "finderairdrop.h"
++
++#include <KLocalizedString>
++
++#include <QComboBox>
++#include <QDir>
++#include <QDragEnterEvent>
++#include <QFileDialog>
++#include <QHBoxLayout>
++#include <QJsonArray>
++#include <QJsonDocument>
++#include <QJsonObject>
++#include <QLabel>
++#include <QMimeData>
++#include <QPainter>
++#include <QPainterPath>
++#include <QProcess>
++#include <QStandardPaths>
++#include <QVBoxLayout>
++
++#include <cmath>
++
++namespace
++{
++const QColor Accent(0x0a, 0x84, 0xff);
++const QColor ContentColor(32, 32, 37);
++
++/** A nearby device: a round tile with its initials and name; files can be dropped on it. */
++class PeerTile : public QWidget
++{
++public:
++    PeerTile(const QString &name, std::function<void(const QList<QUrl> &)> onFiles, QWidget *parent)
++        : QWidget(parent)
++        , m_name(name)
++        , m_onFiles(std::move(onFiles))
++    {
++        setAcceptDrops(true);
++        setCursor(Qt::PointingHandCursor);
++        setFixedSize(112, 118);
++        setToolTip(i18nc("@info:tooltip Finder AirDrop", "Drop files here, or click to choose files to send"));
++    }
++
++protected:
++    void paintEvent(QPaintEvent *) override
++    {
++        QPainter p(this);
++        p.setRenderHint(QPainter::Antialiasing);
++        const QRectF circle((width() - 72) / 2.0, 4, 72, 72);
++        QLinearGradient fill(circle.topLeft(), circle.bottomLeft());
++        fill.setColorAt(0, m_hot ? Accent.lighter(130) : QColor(150, 150, 160));
++        fill.setColorAt(1, m_hot ? Accent : QColor(100, 100, 110));
++        p.setPen(Qt::NoPen);
++        p.setBrush(fill);
++        p.drawEllipse(circle);
++
++        // Initials, like a contact without a photo.
++        QString initials;
++        for (const QString &word : m_name.split(QLatin1Char(' '), Qt::SkipEmptyParts)) {
++            if (initials.size() < 2 && word.at(0).isLetterOrNumber()) {
++                initials += word.at(0).toUpper();
++            }
++        }
++        QFont big = font();
++        big.setPointSizeF(big.pointSizeF() * 1.8);
++        big.setWeight(QFont::DemiBold);
++        p.setFont(big);
++        p.setPen(Qt::white);
++        p.drawText(circle, Qt::AlignCenter, initials.isEmpty() ? QStringLiteral("?") : initials);
++
++        p.setFont(font());
++        p.setPen(QColor(255, 255, 255, 225));
++        const QRect text(0, 84, width(), height() - 84);
++        p.drawText(text, Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap, fontMetrics().elidedText(m_name, Qt::ElideRight, width() * 2 - 8));
++    }
++
++    void dragEnterEvent(QDragEnterEvent *event) override
++    {
++        if (event->mimeData()->hasUrls()) {
++            event->acceptProposedAction();
++            m_hot = true;
++            update();
++        }
++    }
++
++    void dragLeaveEvent(QDragLeaveEvent *) override
++    {
++        m_hot = false;
++        update();
++    }
++
++    void dropEvent(QDropEvent *event) override
++    {
++        m_hot = false;
++        update();
++        QList<QUrl> files;
++        for (const QUrl &url : event->mimeData()->urls()) {
++            if (url.isLocalFile()) {
++                files.append(url);
++            }
++        }
++        if (!files.isEmpty()) {
++            event->acceptProposedAction();
++            m_onFiles(files);
++        }
++    }
++
++    void mouseReleaseEvent(QMouseEvent *) override
++    {
++        m_onFiles({});
++    }
++
++private:
++    QString m_name;
++    std::function<void(const QList<QUrl> &)> m_onFiles;
++    bool m_hot = false;
++};
++}
++
++FinderAirDropView::FinderAirDropView(QWidget *parent)
++    : QWidget(parent)
++{
++    // Prefer the user's copy (omdrop setup puts it in ~/.local/bin).
++    m_omdrop = QStandardPaths::findExecutable(QStringLiteral("omdrop"), {QDir::homePath() + QStringLiteral("/.local/bin")});
++    if (m_omdrop.isEmpty()) {
++        m_omdrop = QStandardPaths::findExecutable(QStringLiteral("omdrop"));
++    }
++
++    auto *layout = new QVBoxLayout(this);
++    layout->setContentsMargins(24, 24, 24, 24);
++    layout->setSpacing(10);
++
++    m_peerArea = new QWidget(this);
++    m_peerLayout = new QHBoxLayout(m_peerArea);
++    m_peerLayout->setSpacing(18);
++    m_peerLayout->setAlignment(Qt::AlignCenter);
++    layout->addStretch(2);
++    layout->addWidget(m_peerArea);
++    layout->addStretch(3);
++
++    m_state = new QLabel(this);
++    m_state->setAlignment(Qt::AlignCenter);
++    m_state->setWordWrap(true);
++    m_state->setStyleSheet(QStringLiteral("color: rgba(255, 255, 255, 140); padding: 0px 60px;"));
++    layout->addWidget(m_state);
++    layout->addSpacing(96); // the AirDrop glyph is painted here
++
++    m_lead = new QLabel(i18nc("@info Finder AirDrop", "AirDrop lets you share instantly with people nearby."), this);
++    m_lead->setAlignment(Qt::AlignCenter);
++    layout->addWidget(m_lead);
++
++    auto *row = new QHBoxLayout;
++    row->addStretch(1);
++    auto *label = new QLabel(i18nc("@label Finder AirDrop", "Allow me to be discovered by:"), this);
++    label->setStyleSheet(QStringLiteral("color: rgba(255, 255, 255, 170);"));
++    row->addWidget(label);
++    m_discover = new QComboBox(this);
++    m_discover->addItem(i18nc("@item Finder AirDrop visibility", "No One"));
++    m_discover->addItem(i18nc("@item Finder AirDrop visibility", "Everyone for 10 Minutes"));
++    connect(m_discover, &QComboBox::activated, this, [this](int index) {
++        setDiscoverable(index == 1);
++    });
++    row->addWidget(m_discover);
++    row->addStretch(1);
++    layout->addLayout(row);
++
++    // The Wi-Fi caveat: omdrop-owl takes over Intel Wi-Fi cards while visible.
++    m_warning = new QLabel(i18nc("@info Finder AirDrop",
++                                 "⚠  While AirDrop is on, this computer's Wi-Fi disconnects for a moment and stays off until AirDrop turns off "
++                                 "(this Wi-Fi card can't do both at once). Downloads, calls and VPNs will drop."),
++                           this);
++    m_warning->setAlignment(Qt::AlignCenter);
++    m_warning->setWordWrap(true);
++    m_warning->setStyleSheet(QStringLiteral("color: #ffd60a; padding: 6px 40px;"));
++    layout->addWidget(m_warning);
++
++    m_statusTimer.setInterval(2000);
++    connect(&m_statusTimer, &QTimer::timeout, this, &FinderAirDropView::refreshStatus);
++    m_peersTimer.setSingleShot(true);
++    m_peersTimer.setInterval(3000);
++    connect(&m_peersTimer, &QTimer::timeout, this, &FinderAirDropView::refreshPeers);
++}
++
++FinderAirDropView::~FinderAirDropView()
++{
++    stopPeers();
++}
++
++void FinderAirDropView::setPendingFiles(const QList<QUrl> &files)
++{
++    m_pending = files;
++    if (!files.isEmpty()) {
++        setState(i18ncp("@info Finder AirDrop", "Choose a device to send 1 item to.", "Choose a device to send %1 items to.", files.size()));
++    }
++}
++
++QIcon FinderAirDropView::icon(const QColor &color)
++{
++    QIcon icon;
++    for (const int size : {16, 18, 24, 32, 64, 128}) {
++        for (const qreal dpr : {1.0, 1.5, 2.0}) {
++            QPixmap pm(QSize(size, size) * dpr);
++            pm.setDevicePixelRatio(dpr);
++            pm.fill(Qt::transparent);
++            QPainter p(&pm);
++            p.setRenderHint(QPainter::Antialiasing);
++            p.scale(size / 16.0, size / 16.0);
++            p.setPen(QPen(color, 1.1, Qt::SolidLine, Qt::RoundCap));
++            p.setBrush(Qt::NoBrush);
++            const QPointF c(8, 9);
++            // Three arcs opening downward around a dot, like Apple's glyph.
++            for (const qreal r : {2.6, 4.9, 7.2}) {
++                p.drawArc(QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r), int(-40 * 16), int(260 * 16));
++            }
++            p.setPen(Qt::NoPen);
++            p.setBrush(color);
++            p.drawEllipse(c, 1.1, 1.1);
++            p.end();
++            icon.addPixmap(pm);
++        }
++    }
++    return icon;
++}
++
++void FinderAirDropView::paintEvent(QPaintEvent *)
++{
++    QPainter p(this);
++    p.setRenderHint(QPainter::Antialiasing);
++    p.fillRect(rect(), ContentColor);
++
++    // Radar rings spreading from the AirDrop glyph above the caption.
++    const QPointF center(width() / 2.0, m_lead->geometry().top() - 56);
++    for (int i = 1; i <= 6; ++i) {
++        const qreal r = 70.0 * i;
++        p.setPen(QPen(QColor(255, 255, 255, std::max(4, 22 - i * 3)), 1));
++        p.setBrush(Qt::NoBrush);
++        p.drawEllipse(center, r, r);
++    }
++    p.setPen(Qt::NoPen);
++    QLinearGradient fill(center - QPointF(0, 40), center + QPointF(0, 40));
++    fill.setColorAt(0, QColor(0x5a, 0xc8, 0xfa));
++    fill.setColorAt(1, Accent);
++    p.setBrush(fill);
++    p.drawEllipse(center, 40, 40);
++    const QPixmap glyph = icon(Qt::white).pixmap(QSize(52, 52), devicePixelRatioF());
++    p.drawPixmap(QPointF(center.x() - 26, center.y() - 27), glyph);
++}
++
++void FinderAirDropView::showEvent(QShowEvent *event)
++{
++    QWidget::showEvent(event);
++    checkReady();
++}
++
++void FinderAirDropView::hideEvent(QHideEvent *event)
++{
++    QWidget::hideEvent(event);
++    m_statusTimer.stop();
++    m_peersTimer.stop();
++    stopPeers();
++}
++
++void FinderAirDropView::runOmdrop(const QStringList &args, std::function<void(int, const QByteArray &, const QByteArray &)> done)
++{
++    auto *process = new QProcess(this);
++    connect(process, &QProcess::finished, this, [process, done](int code, QProcess::ExitStatus) {
++        done(code, process->readAllStandardOutput(), process->readAllStandardError());
++        process->deleteLater();
++    });
++    connect(process, &QProcess::errorOccurred, this, [process, done](QProcess::ProcessError error) {
++        if (error == QProcess::FailedToStart) {
++            done(-1, {}, {});
++            process->deleteLater();
++        }
++    });
++    process->start(m_omdrop, args);
++}
++
++void FinderAirDropView::checkReady()
++{
++    if (m_omdrop.isEmpty()) {
++        m_ready = false;
++        m_discover->setEnabled(false);
++        setState(i18nc("@info Finder AirDrop", "AirDrop needs omdrop. Install omdrop-owl and run “omdrop setup”."));
++        return;
++    }
++    runOmdrop({QStringLiteral("doctor"), QStringLiteral("--json")}, [this](int, const QByteArray &out, const QByteArray &) {
++        const QJsonObject doctor = QJsonDocument::fromJson(out).object();
++        m_ready = doctor.value(QStringLiteral("ready")).toBool();
++        m_discover->setEnabled(m_ready);
++        if (!m_ready) {
++            QStringList missing;
++            for (const QJsonValue &item : doctor.value(QStringLiteral("missing")).toArray()) {
++                missing.append(item.toObject().value(QStringLiteral("say")).toString());
++            }
++            setState(i18nc("@info Finder AirDrop", "AirDrop isn't ready: %1", missing.isEmpty() ? i18n("omdrop did not answer.") : missing.join(QLatin1Char(' '))));
++            return;
++        }
++        refreshStatus();
++        m_statusTimer.start();
++    });
++}
++
++void FinderAirDropView::refreshStatus()
++{
++    runOmdrop({QStringLiteral("status"), QStringLiteral("--json")}, [this](int, const QByteArray &out, const QByteArray &) {
++        const QJsonObject status = QJsonDocument::fromJson(out).object();
++        const bool visible = status.value(QStringLiteral("visible")).toBool() || status.value(QStringLiteral("receiving")).toBool();
++        m_discover->setCurrentIndex(visible ? 1 : 0);
++        if (visible != m_visible) {
++            m_visible = visible;
++            if (visible) {
++                refreshPeers();
++            } else {
++                stopPeers();
++                showPeers({});
++            }
++        }
++        if (!m_sending && m_pending.isEmpty()) {
++            if (!visible) {
++                setState(i18nc("@info Finder AirDrop", "Turn on discovery to see nearby devices."));
++            } else if (m_peerLayout->count() == 0) {
++                setState(i18nc("@info Finder AirDrop", "Looking for nearby devices… Open the share sheet on your iPhone or Mac."));
++            }
++        }
++    });
++}
++
++void FinderAirDropView::refreshPeers()
++{
++    if (!m_visible || m_peersProcess) {
++        return;
++    }
++    // A named lookup takes 15-20 seconds; run one at a time, then again shortly after.
++    auto *process = new QProcess(this);
++    m_peersProcess = process;
++    connect(process, &QProcess::finished, this, [this, process](int code, QProcess::ExitStatus) {
++        const QJsonArray array = QJsonDocument::fromJson(process->readAllStandardOutput()).array();
++        process->deleteLater();
++        if (code == 0 || !array.isEmpty()) {
++            QList<Peer> peers;
++            for (const QJsonValue &value : array) {
++                const QJsonObject peer = value.toObject();
++                const QString name = peer.value(QStringLiteral("name")).toString();
++                if (!name.isEmpty()) { // unnamed devices can't be picked by a person
++                    peers.append({peer.value(QStringLiteral("mac")).toString(), name});
++                }
++            }
++            showPeers(peers);
++        }
++        if (m_visible && isVisible()) {
++            m_peersTimer.start();
++        }
++    });
++    process->start(m_omdrop, {QStringLiteral("peers"), QStringLiteral("-n"), QStringLiteral("--json")});
++}
++
++void FinderAirDropView::stopPeers()
++{
++    if (m_peersProcess) {
++        // omdrop runs the lookup as its own process group and cleans up on TERM.
++        m_peersProcess->disconnect(this);
++        m_peersProcess->terminate();
++        m_peersProcess->waitForFinished(2000);
++        m_peersProcess->deleteLater();
++    }
++}
++
++void FinderAirDropView::setDiscoverable(bool on)
++{
++    m_discover->setEnabled(false);
++    setState(on ? i18nc("@info Finder AirDrop", "Turning AirDrop on… Wi-Fi will disconnect.") : i18nc("@info Finder AirDrop", "Turning AirDrop off… Wi-Fi will reconnect."));
++    const QStringList args = on ? QStringList{QStringLiteral("on"), QStringLiteral("-e"), QStringLiteral("10m")} : QStringList{QStringLiteral("off")};
++    runOmdrop(args, [this](int code, const QByteArray &, const QByteArray &err) {
++        m_discover->setEnabled(m_ready);
++        if (code != 0) {
++            const QString message = QString::fromUtf8(err).trimmed().section(QLatin1Char('\n'), -1);
++            setState(message.isEmpty() ? i18nc("@info Finder AirDrop", "omdrop could not change AirDrop.") : message);
++        }
++        refreshStatus();
++    });
++}
++
++void FinderAirDropView::showPeers(const QList<Peer> &peers)
++{
++    while (QLayoutItem *item = m_peerLayout->takeAt(0)) {
++        delete item->widget();
++        delete item;
++    }
++    for (const Peer &peer : peers) {
++        auto *tile = new PeerTile(peer.name, [this, peer](const QList<QUrl> &dropped) {
++            QList<QUrl> files = dropped;
++            if (files.isEmpty()) {
++                files = m_pending;
++            }
++            if (files.isEmpty()) {
++                files = QFileDialog::getOpenFileUrls(this, i18nc("@title:window", "Send with AirDrop to %1", peer.name));
++            }
++            if (!files.isEmpty()) {
++                send(peer, files);
++            }
++        }, m_peerArea);
++        m_peerLayout->addWidget(tile);
++    }
++}
++
++void FinderAirDropView::send(const Peer &peer, const QList<QUrl> &files)
++{
++    if (m_sending) {
++        return;
++    }
++    m_sending = true;
++    m_pending.clear();
++    setState(i18ncp("@info Finder AirDrop", "Sending 1 item to %2… Accept it on that device.", "Sending %1 items to %2… Accept them on that device.", files.size(), peer.name));
++    QStringList args{QStringLiteral("send"), QStringLiteral("--to"), peer.mac};
++    for (const QUrl &file : files) {
++        args.append(file.toLocalFile());
++    }
++    runOmdrop(args, [this, peer](int code, const QByteArray &, const QByteArray &err) {
++        m_sending = false;
++        if (code == 0) {
++            setState(i18nc("@info Finder AirDrop", "Sent to %1.", peer.name));
++        } else {
++            const QString message = QString::fromUtf8(err).trimmed().section(QLatin1Char('\n'), -1);
++            setState(i18nc("@info Finder AirDrop", "Couldn't send to %1: %2", peer.name, message.isEmpty() ? i18n("the transfer failed.") : message));
++        }
++    });
++}
++
++void FinderAirDropView::setState(const QString &text)
++{
++    m_state->setText(text);
++}
++
++#include "moc_finderairdrop.cpp"
+diff --git a/src/finder/finderairdrop.h b/src/finder/finderairdrop.h
+new file mode 100644
+index 000000000..66dc11f92
+--- /dev/null
++++ b/src/finder/finderairdrop.h
+@@ -0,0 +1,83 @@
++/*
++ * SPDX-FileCopyrightText: 2026 Brhett
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef FINDERAIRDROP_H
++#define FINDERAIRDROP_H
++
++#include <QIcon>
++#include <QPointer>
++#include <QTimer>
++#include <QUrl>
++#include <QWidget>
++
++class QComboBox;
++class QHBoxLayout;
++class QLabel;
++class QProcess;
++
++/**
++ * @brief Finder's AirDrop window, backed by the omdrop command-line tool.
++ *
++ * Shows nearby Apple devices as round tiles (drop files on one, or click it
++ * to pick files), and the "Allow me to be discovered by" control. omdrop
++ * (github.com/netmojo-systems/omdrop-plugin) with the omdrop-owl radio
++ * backend does the actual AirDrop; on Intel Wi-Fi that radio takes the card
++ * over, so Wi-Fi drops while AirDrop is on, which the panel says up front.
++ */
++class FinderAirDropView : public QWidget
++{
++    Q_OBJECT
++
++public:
++    explicit FinderAirDropView(QWidget *parent = nullptr);
++    ~FinderAirDropView() override;
++
++    /** Files to send to the next device the user picks (from "AirDrop…"). */
++    void setPendingFiles(const QList<QUrl> &files);
++
++    /** The AirDrop glyph: a dot inside widening arcs. */
++    static QIcon icon(const QColor &color);
++
++protected:
++    void paintEvent(QPaintEvent *event) override;
++    void showEvent(QShowEvent *event) override;
++    void hideEvent(QHideEvent *event) override;
++
++private:
++    struct Peer {
++        QString mac;
++        QString name;
++    };
++
++    void runOmdrop(const QStringList &args, std::function<void(int, const QByteArray &, const QByteArray &)> done);
++    void checkReady();
++    void refreshStatus();
++    void refreshPeers();
++    void stopPeers();
++    void setDiscoverable(bool on);
++    void showPeers(const QList<Peer> &peers);
++    void send(const Peer &peer, const QList<QUrl> &files);
++    void setState(const QString &text);
++
++    QString m_omdrop;
++    bool m_ready = false;
++    bool m_visible = false; // the radio is up (Wi-Fi is off on Intel)
++    bool m_sending = false;
++    QList<QUrl> m_pending;
++
++    QTimer m_statusTimer;
++    QPointer<QProcess> m_peersProcess;
++    QTimer m_peersTimer;
++
++    QWidget *m_peerArea;
++    QHBoxLayout *m_peerLayout;
++    QLabel *m_lead;
++    QLabel *m_state;
++    QLabel *m_warning;
++    QComboBox *m_discover;
++};
++
++#endif
+diff --git a/src/finder/finderchrome.cpp b/src/finder/finderchrome.cpp
+index 61f7fac73..a116a18a1 100644
+--- a/src/finder/finderchrome.cpp
++++ b/src/finder/finderchrome.cpp
+@@ -5,13 +5,16 @@
+  */
+ 
+ #include "finderchrome.h"
++#include "finderairdrop.h"
+ #include "findercolumnview.h"
++#include "findersidebar.h"
+ 
+ #include "dolphinmainwindow.h"
+ #include "dolphinviewcontainer.h"
+ #include "views/dolphinview.h"
+ 
+ #include <KConfigGroup>
++#include <KFileItem>
+ #include <KSharedConfig>
+ 
+ #include <KUrlComboBox>
+@@ -393,7 +396,18 @@ void FinderChrome::setToolBar(QToolBar *toolBar)
+         connect(m_columnsAction, &QAction::triggered, this, [this]() {
+             setColumnMode(true);
+         });
++        // Go › AirDrop, with Finder's shortcut (⌘⇧R there, Ctrl+Shift+R here).
++        if (auto *xmlWindow = qobject_cast<KXmlGuiWindow *>(m_window)) {
++            QAction *airDrop = xmlWindow->actionCollection()->addAction(QStringLiteral("finder_airdrop"));
++            airDrop->setText(i18nc("@action Finder", "AirDrop"));
++            airDrop->setIcon(FinderAirDropView::icon(QColor(255, 255, 255, 225)));
++            KActionCollection::setDefaultShortcut(airDrop, QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_R));
++            connect(airDrop, &QAction::triggered, this, [this]() {
++                showAirDrop({});
++            });
++        }
+         connect(qobject_cast<DolphinMainWindow *>(m_window), &DolphinMainWindow::urlChanged, this, [this]() {
++            hideAirDrop();
+             if (m_columnMode) {
+                 QTimer::singleShot(0, this, &FinderChrome::attachColumns);
+             }
+@@ -446,6 +460,48 @@ QIcon FinderChrome::columnsIcon()
+     return icon;
+ }
+ 
++void FinderChrome::showAirDrop(const QList<QUrl> &files)
++{
++    auto *window = qobject_cast<DolphinMainWindow *>(m_window);
++    DolphinViewContainer *container = window ? window->activeViewContainer() : nullptr;
++    if (!container) {
++        return;
++    }
++    DolphinView *view = container->view();
++    if (!m_airDrop) {
++        m_airDrop = new FinderAirDropView(view);
++    }
++    if (m_airDrop->parentWidget() != view) {
++        m_airDrop->setParent(view);
++    }
++    view->removeEventFilter(this);
++    view->installEventFilter(this);
++    m_airDrop->setGeometry(view->rect());
++    m_airDrop->setPendingFiles(files);
++    m_airDrop->show();
++    m_airDrop->raise();
++    if (m_title) {
++        m_title->setText(i18nc("@title Finder window", "AirDrop"));
++    }
++    if (m_finderSidebar) {
++        m_finderSidebar->setUrl(FinderSidebar::AirDropUrl());
++    }
++}
++
++void FinderChrome::hideAirDrop()
++{
++    if (!m_airDrop || !m_airDrop->isVisible()) {
++        return;
++    }
++    m_airDrop->hide();
++    updateTitle();
++    auto *window = qobject_cast<DolphinMainWindow *>(m_window);
++    DolphinViewContainer *container = window ? window->activeViewContainer() : nullptr;
++    if (container && m_finderSidebar) {
++        m_finderSidebar->setUrl(container->url());
++    }
++}
++
+ void FinderChrome::leaveColumnMode()
+ {
+     setColumnMode(false);
+@@ -579,6 +635,22 @@ QToolButton *FinderChrome::createMoreButton(QToolBar *toolBar)
+             return;
+         }
+         KActionCollection *ac = window->actionCollection();
++        // Finder's Share › AirDrop: send the selected files to a nearby device.
++        menu->addAction(FinderAirDropView::icon(QColor(255, 255, 255, 225)), i18nc("@action:inmenu Finder", "AirDrop…"), this, [this]() {
++            QList<QUrl> files;
++            if (auto *window = qobject_cast<DolphinMainWindow *>(m_window)) {
++                if (DolphinViewContainer *container = window->activeViewContainer()) {
++                    const KFileItemList selected = container->view()->selectedItems();
++                    for (const KFileItem &item : selected) {
++                        if (item.isLocalFile() && !item.isDir()) {
++                            files.append(item.url());
++                        }
++                    }
++                }
++            }
++            showAirDrop(files);
++        });
++        menu->addSeparator();
+         const QList<QStringList> sections = {
+             {QStringLiteral("create_dir"), QStringLiteral("new_menu")},
+             {QStringLiteral("properties"), QStringLiteral("renamefile"), QStringLiteral("duplicate"), QStringLiteral("movetotrash")},
+@@ -730,6 +802,17 @@ void FinderChrome::updateNavigatorVisibility()
+ void FinderChrome::setSidebar(QWidget *sidebar)
+ {
+     m_sidebar = sidebar;
++    if (sidebar && !m_finderSidebar) {
++        m_finderSidebar = sidebar->findChild<FinderSidebar *>();
++        if (m_finderSidebar) {
++            connect(m_finderSidebar, &FinderSidebar::airDropRequested, this, [this]() {
++                showAirDrop({});
++            });
++            // Picking any place (even the folder already shown) closes AirDrop.
++            connect(m_finderSidebar, &FinderSidebar::placeActivated, this, &FinderChrome::hideAirDrop);
++            connect(m_finderSidebar, &FinderSidebar::tabRequested, this, &FinderChrome::hideAirDrop);
++        }
++    }
+     if (sidebar) {
+         sidebar->installEventFilter(this);
+         // Only the window paints the glass; the dock itself stays clear.
+@@ -860,9 +943,15 @@ bool FinderChrome::eventFilter(QObject *watched, QEvent *event)
+         return false;
+     }
+ 
+-    if (m_columns && watched == m_columns->parentWidget() && event->type() == QEvent::Resize) {
+-        m_columns->setGeometry(m_columns->parentWidget()->rect());
+-        return false;
++    if (event->type() == QEvent::Resize && watched->isWidgetType()) {
++        // Keep the overlays (column view, AirDrop) covering the view.
++        auto *view = static_cast<QWidget *>(watched);
++        if (m_columns && view == m_columns->parentWidget()) {
++            m_columns->setGeometry(view->rect());
++        }
++        if (m_airDrop && view == m_airDrop->parentWidget()) {
++            m_airDrop->setGeometry(view->rect());
++        }
+     }
+ 
+     if (watched == m_title && event->type() == QEvent::MouseButtonPress) {
+diff --git a/src/finder/finderchrome.h b/src/finder/finderchrome.h
+index 8fef78d97..ec3a84525 100644
+--- a/src/finder/finderchrome.h
++++ b/src/finder/finderchrome.h
+@@ -11,8 +11,11 @@
+ #include <QObject>
+ #include <QPointer>
+ #include <QRegion>
++#include <QUrl>
+ 
++class FinderAirDropView;
+ class FinderColumnView;
++class FinderSidebar;
+ class KWindowShadow;
+ class QMainWindow;
+ class QAction;
+@@ -58,6 +61,9 @@ private:
+     void setColumnMode(bool on);
+     void attachColumns();
+     void leaveColumnMode();
++    /** Shows the AirDrop panel over the view; @p files are offered for sending. */
++    void showAirDrop(const QList<QUrl> &files);
++    void hideAirDrop();
+     void updateTitleColor();
+     void updateLead();
+     void paintCapsules(QPainter &p);
+@@ -79,6 +85,8 @@ private:
+     QPointer<QAction> m_navigatorAction;
+     QAction *m_columnsAction = nullptr;
+     QPointer<FinderColumnView> m_columns;
++    QPointer<FinderAirDropView> m_airDrop;
++    QPointer<FinderSidebar> m_finderSidebar;
+     bool m_columnMode = false;
+     KWindowShadow *m_shadow = nullptr;
+     QRegion m_appliedBlur; // last blur region sent to KWin
+diff --git a/src/finder/findersidebar.cpp b/src/finder/findersidebar.cpp
+index db465a91b..2d62a51ce 100644
+--- a/src/finder/findersidebar.cpp
++++ b/src/finder/findersidebar.cpp
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include "findersidebar.h"
++#include "finderairdrop.h"
+ 
+ #include <KFilePlacesModel>
+ #include <KLocalizedString>
+@@ -102,7 +103,9 @@ public:
+         }
+ 
+         // Golden Gate: accent-colored sidebar icons while the window is active.
+-        const QIcon icon = QIcon::fromTheme(index.data(Qt::DecorationRole).toString());
++        const QString iconName = index.data(Qt::DecorationRole).toString();
++        static const QIcon airDrop = FinderAirDropView::icon(Qt::white);
++        const QIcon icon = iconName == QLatin1String("finder-airdrop") ? airDrop : QIcon::fromTheme(iconName);
+         const qreal dpr = p->device() ? p->device()->devicePixelRatioF() : 1.0;
+         const QPixmap pm = tinted(icon, IconSize, dpr, active ? Accent : QColor(160, 160, 165));
+         const int iconX = int(pill.left()) + 8;
+@@ -218,6 +221,11 @@ void FinderSidebar::rebuild()
+     }
+     if (!locations.isEmpty()) {
+         header(i18nc("@title Finder sidebar section", "Locations"));
++        // AirDrop leads Locations, as in Finder; it opens the AirDrop panel.
++        auto *airDrop = new QStandardItem(i18nc("@item:inlistbox Finder sidebar", "AirDrop"));
++        airDrop->setData(QStringLiteral("finder-airdrop"), Qt::DecorationRole);
++        airDrop->setData(AirDropUrl(), UrlRole);
++        m_model->appendRow(airDrop);
+         for (auto *item : std::as_const(locations)) {
+             m_model->appendRow(item);
+         }
+@@ -225,6 +233,11 @@ void FinderSidebar::rebuild()
+     setUrl(m_url);
+ }
+ 
++QUrl FinderSidebar::AirDropUrl()
++{
++    return QUrl(QStringLiteral("finder-airdrop:/"));
++}
++
+ void FinderSidebar::setUrl(const QUrl &url)
+ {
+     m_url = url;
+@@ -249,6 +262,10 @@ QModelIndex FinderSidebar::placeIndex(const QModelIndex &row) const
+ 
+ void FinderSidebar::activate(const QModelIndex &index, bool newTab)
+ {
++    if (index.data(UrlRole).toUrl() == AirDropUrl()) {
++        Q_EMIT airDropRequested();
++        return;
++    }
+     const QModelIndex place = placeIndex(index);
+     if (!place.isValid()) {
+         return;
+diff --git a/src/finder/findersidebar.h b/src/finder/findersidebar.h
+index 33a5bd7b4..fb4cc0c45 100644
+--- a/src/finder/findersidebar.h
++++ b/src/finder/findersidebar.h
+@@ -32,6 +32,9 @@ public:
+     /** Highlights the place that best matches the folder being shown. */
+     void setUrl(const QUrl &url);
+ 
++    /** The sidebar's AirDrop item; setUrl(AirDropUrl()) highlights it. */
++    static QUrl AirDropUrl();
++
+     enum Roles {
+         UrlRole = Qt::UserRole + 1,
+         HeaderRole,
+@@ -41,6 +44,8 @@ public:
+ Q_SIGNALS:
+     void placeActivated(const QUrl &url);
+     void tabRequested(const QUrl &url);
++    /** The AirDrop item was clicked. */
++    void airDropRequested();
+ 
+ protected:
+     void mousePressEvent(QMouseEvent *event) override;
+-- 
+2.56.0
+

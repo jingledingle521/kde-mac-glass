@@ -1,0 +1,182 @@
+From 10f496db20d17c8ce18b6774d4aec733c24e307a Mon Sep 17 00:00:00 2001
+From: Brhett <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 11:19:22 -0500
+Subject: [PATCH 09/30] Finder selection: icon tile + blue name pill, blue rows
+ in list view, no focus box; footer hairline
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ src/finder/finderchrome.cpp                |  8 ++++
+ src/kitemviews/kitemlistwidget.cpp         | 12 ++++++
+ src/kitemviews/kitemlistwidget.h           |  6 +++
+ src/kitemviews/kstandarditemlistwidget.cpp | 43 ++++++++++++++++++++++
+ src/kitemviews/kstandarditemlistwidget.h   |  2 +
+ src/views/dolphinview.cpp                  |  4 +-
+ 6 files changed, 72 insertions(+), 3 deletions(-)
+
+diff --git a/src/finder/finderchrome.cpp b/src/finder/finderchrome.cpp
+index 0141c4160..df840bb89 100644
+--- a/src/finder/finderchrome.cpp
++++ b/src/finder/finderchrome.cpp
+@@ -751,6 +751,14 @@ void FinderChrome::paintBackground()
+     }
+ 
+ 
++    // A hairline above Finder's footer (Dolphin's status bar).
++    for (QWidget *child : m_window->findChildren<QWidget *>()) {
++        if (child->isVisible() && qstrcmp(child->metaObject()->className(), "DolphinStatusBar") == 0) {
++            const QPoint top = child->mapTo(m_window, QPoint(0, 0));
++            p.fillRect(QRectF(top.x(), top.y(), child->width(), 1), QColor(0, 0, 0, 120));
++        }
++    }
++
+     // Light inner edge around the whole window, like macOS's window border.
+     p.setClipping(false);
+     if (radius() > 0) {
+diff --git a/src/kitemviews/kitemlistwidget.cpp b/src/kitemviews/kitemlistwidget.cpp
+index c1dbb3cef..2c66c97bb 100644
+--- a/src/kitemviews/kitemlistwidget.cpp
++++ b/src/kitemviews/kitemlistwidget.cpp
+@@ -129,6 +129,10 @@ void KItemListWidget::paint(QPainter *painter, const QStyleOptionGraphicsItem *o
+         painter->restore();
+     }
+ 
++    if (paintFinderHighlight(painter, widget, (m_selected || m_clickHighlighted) && m_editedRole.isEmpty())) {
++        return;
++    }
++
+     const QStyle::State selectedState(m_selected ? QStyle::State_Selected : QStyle::State(0));
+     if ((m_selected || m_current) && m_editedRole.isEmpty()) {
+         const QStyle::State activeState(isActiveWindow() && widget->hasFocus() ? QStyle::State_Active : 0);
+@@ -157,6 +161,14 @@ void KItemListWidget::paint(QPainter *painter, const QStyleOptionGraphicsItem *o
+     }
+ }
+ 
++bool KItemListWidget::paintFinderHighlight(QPainter *painter, QWidget *widget, bool selected)
++{
++    Q_UNUSED(painter)
++    Q_UNUSED(widget)
++    Q_UNUSED(selected)
++    return false;
++}
++
+ void KItemListWidget::setVisibleRoles(const QList<QByteArray> &roles)
+ {
+     const QList<QByteArray> previousRoles = m_visibleRoles;
+diff --git a/src/kitemviews/kitemlistwidget.h b/src/kitemviews/kitemlistwidget.h
+index 100c13466..e0267cc28 100644
+--- a/src/kitemviews/kitemlistwidget.h
++++ b/src/kitemviews/kitemlistwidget.h
+@@ -219,6 +219,12 @@ protected:
+     virtual void siblingsInformationChanged(const QBitArray &current, const QBitArray &previous);
+     virtual void editedRoleChanged(const QByteArray &current, const QByteArray &previous);
+     virtual void iconSizeChanged(int current, int previous);
++
++    /**
++     * Finder: paints the selection in Finder's style instead of the style's
++     * item panel. Returns true if it painted (then no hover/focus is drawn).
++     */
++    virtual bool paintFinderHighlight(QPainter *painter, QWidget *widget, bool selected);
+     void resizeEvent(QGraphicsSceneResizeEvent *event) override;
+     void clearHoverCache();
+ 
+diff --git a/src/kitemviews/kstandarditemlistwidget.cpp b/src/kitemviews/kstandarditemlistwidget.cpp
+index bbafa3afa..0e179ae0c 100644
+--- a/src/kitemviews/kstandarditemlistwidget.cpp
++++ b/src/kitemviews/kstandarditemlistwidget.cpp
+@@ -25,6 +25,7 @@
+ #include <QGraphicsSceneResizeEvent>
+ #include <QGraphicsView>
+ #include <QPixmapCache>
++#include <QRegularExpression>
+ #include <QStyleOption>
+ #include <QTextBoundaryFinder>
+ #include <QVariantAnimation>
+@@ -475,6 +476,45 @@ void KStandardItemListWidget::paint(QPainter *painter, const QStyleOptionGraphic
+ #endif
+ }
+ 
++bool KStandardItemListWidget::paintFinderHighlight(QPainter *painter, QWidget *widget, bool selected)
++{
++    // Finder: no hover or focus marks; a selected item gets a gray tile behind
++    // its icon and a blue pill behind its name (a blue row in list view).
++    // Without keyboard focus the blue turns gray.
++    if (!selected) {
++        return true;
++    }
++    triggerCacheRefreshing();
++    const bool focused = isActiveWindow() && widget->hasFocus();
++    const QColor accent = focused ? QColor(0x0a, 0x84, 0xff) : QColor(255, 255, 255, 46);
++
++    painter->save();
++    painter->setRenderHint(QPainter::Antialiasing);
++    painter->setPen(Qt::NoPen);
++    if (m_layout == DetailsLayout) {
++        painter->setBrush(accent);
++        painter->drawRoundedRect(selectionRectFull().adjusted(2, 0, -2, 0), 6, 6);
++    } else {
++        painter->setBrush(QColor(255, 255, 255, 30));
++        painter->drawRoundedRect(m_iconRect.adjusted(-5, -5, 5, 5), 7, 7);
++        if (const TextInfo *name = m_textInfo.value("text")) {
++            static const QRegularExpression lineBreak(QStringLiteral("[\\x{2028}\\n]"));
++            qreal width = 0;
++            const QStringList lines = name->staticText.text().split(lineBreak);
++            for (const QString &line : lines) {
++                width = std::max(width, qreal(m_customizedFontMetrics.horizontalAdvance(line)));
++            }
++            width = std::min(width, m_textRect.width());
++            const qreal height = name->staticText.size().height();
++            const qreal left = m_layout == IconsLayout ? m_textRect.center().x() - width / 2 : name->pos.x();
++            painter->setBrush(accent);
++            painter->drawRoundedRect(QRectF(left - 5, name->pos.y() - 1, width + 10, height + 2), 5, 5);
++        }
++    }
++    painter->restore();
++    return true;
++}
++
+ QRectF KStandardItemListWidget::textRect() const
+ {
+     const_cast<KStandardItemListWidget *>(this)->triggerCacheRefreshing();
+@@ -719,6 +759,9 @@ QColor KStandardItemListWidget::textColor(const QWidget &widget) const
+     }
+ 
+     const QPalette::ColorGroup group = isActiveWindow() && widget.hasFocus() ? QPalette::Active : QPalette::Inactive;
++    if (isSelected() && group == QPalette::Active) {
++        return Qt::white; // on Finder's blue selection
++    }
+     const QPalette::ColorRole role = normalTextColorRole();
+     return styleOption().palette.color(group, role);
+ }
+diff --git a/src/kitemviews/kstandarditemlistwidget.h b/src/kitemviews/kstandarditemlistwidget.h
+index e97316919..f5ff29aca 100644
+--- a/src/kitemviews/kstandarditemlistwidget.h
++++ b/src/kitemviews/kstandarditemlistwidget.h
+@@ -118,6 +118,8 @@ public:
+     static KItemListWidgetInformant *createInformant();
+ 
+ protected:
++    bool paintFinderHighlight(QPainter *painter, QWidget *widget, bool selected) override;
++
+     /**
+      * Invalidates the cache which results in calling KStandardItemListWidget::refreshCache() as
+      * soon as the item need to gets repainted.
+diff --git a/src/views/dolphinview.cpp b/src/views/dolphinview.cpp
+index 90eb723ae..ca2a11f1e 100644
+--- a/src/views/dolphinview.cpp
++++ b/src/views/dolphinview.cpp
+@@ -743,9 +743,7 @@ void DolphinView::requestStatusBarText()
+             }
+         }
+ 
+-        if (folderCount + fileCount == 1) {
+-            // If only one item is selected, show info about it
+-            Q_EMIT statusBarTextChanged(list.first().getStatusBarInfo());
++        if (false) { // Finder: one selected item reads "1 of N selected" too
+         } else {
+             // At least 2 items are selected
+             emitStatusBarText(folderCount, fileCount, totalFileSize, HasSelection);
+-- 
+2.56.0
+

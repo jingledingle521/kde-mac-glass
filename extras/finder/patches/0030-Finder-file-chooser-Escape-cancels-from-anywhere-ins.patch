@@ -1,0 +1,130 @@
+From bd71f601e0dcfb83082a9acc31425ec395ccefb8 Mon Sep 17 00:00:00 2001
+From: Brhett <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 15:26:30 -0500
+Subject: [PATCH 30/30] Finder file chooser: Escape cancels from anywhere;
+ installer fixes the portal setting
+
+Escape is caught for the whole picker before the file view or a text field
+can take it (an open dropdown still closes first). finder-extras/install.sh
+now sets org.freedesktop.impl.portal.FileChooser=finder;kde in
+kde-portals.conf whether the file is missing, has another FileChooser
+choice, or has none, keeping the user's other portal choices.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ README.md                                   |  5 +++++
+ finder-extras/install.sh                    | 14 ++++++++----
+ src/finder/filechooser/finderfiledialog.cpp | 25 +++++++++++++++++----
+ src/finder/filechooser/finderfiledialog.h   |  1 +
+ 4 files changed, 37 insertions(+), 8 deletions(-)
+
+diff --git a/README.md b/README.md
+index f7fe6ac82..793020dc9 100644
+--- a/README.md
++++ b/README.md
+@@ -28,6 +28,11 @@ Based on Dolphin 26.08.1. Every Finder change is a commit on top of the
+   context menu, and a title and footer that follow the active column.
+ - **Footer**: "16 items, 727 GB available" / "1 of 16 selected", with the
+   zoom slider.
++- **Open/Save windows for other apps**: browsers, Flatpak and Snap apps
++  and others that ask the desktop for a file dialog get a Finder-style one
++  (sidebar, list/icon views, Save As, file types; Escape cancels). The
++  installer registers it with xdg-desktop-portal (KDE's dialog stays as the
++  fallback; KDE apps keep their own dialog).
+ - **AirDrop** with iPhones and Macs: AirDrop in the sidebar (Ctrl+Shift+R),
+   right-click › Share › AirDrop, progress cards for sending and receiving,
+   and notifications. See below.
+diff --git a/finder-extras/install.sh b/finder-extras/install.sh
+index 2f26cb6d5..ddec510d6 100755
+--- a/finder-extras/install.sh
++++ b/finder-extras/install.sh
+@@ -39,11 +39,17 @@ services=${XDG_DATA_HOME:-$HOME/.local/share}/dbus-1/services
+ mkdir -p "$services" "$config/xdg-desktop-portal"
+ sed "s|@PREFIX@|$prefix|" "$root/finder-extras/org.freedesktop.impl.portal.desktop.finder.service" \
+     > "$services/org.freedesktop.impl.portal.desktop.finder.service"
+-if [ -f "$config/xdg-desktop-portal/kde-portals.conf" ]; then
+-    grep -q 'FileChooser=finder' "$config/xdg-desktop-portal/kde-portals.conf" \
+-        || echo "Add org.freedesktop.impl.portal.FileChooser=finder;kde under [preferred] in $config/xdg-desktop-portal/kde-portals.conf"
++# Point the portal's file chooser at Finder (KDE's dialog stays as fallback),
++# keeping any other portal choices already made in the user's file.
++conf=$config/xdg-desktop-portal/kde-portals.conf
++if [ ! -f "$conf" ]; then
++    cp "$root/finder-extras/kde-portals.conf" "$conf"
++elif grep -q '^org.freedesktop.impl.portal.FileChooser=' "$conf"; then
++    sed -i 's|^org.freedesktop.impl.portal.FileChooser=.*|org.freedesktop.impl.portal.FileChooser=finder;kde|' "$conf"
++elif grep -q '^\[preferred\]' "$conf"; then
++    sed -i '/^\[preferred\]/a org.freedesktop.impl.portal.FileChooser=finder;kde' "$conf"
+ else
+-    cp "$root/finder-extras/kde-portals.conf" "$config/xdg-desktop-portal/kde-portals.conf"
++    printf '\n[preferred]\ndefault=kde\norg.freedesktop.impl.portal.FileChooser=finder;kde\n' >> "$conf"
+ fi
+ # xdg-desktop-portal only reads backend descriptions from its system folder.
+ portal=/usr/share/xdg-desktop-portal/portals/finder.portal
+diff --git a/src/finder/filechooser/finderfiledialog.cpp b/src/finder/filechooser/finderfiledialog.cpp
+index eb5dcf49d..5112c2793 100644
+--- a/src/finder/filechooser/finderfiledialog.cpp
++++ b/src/finder/filechooser/finderfiledialog.cpp
+@@ -13,6 +13,7 @@
+ #include <KLocalizedString>
+ #include <KUrlNavigator>
+ 
++#include <QApplication>
+ #include <QCloseEvent>
+ #include <QComboBox>
+ #include <QDir>
+@@ -48,6 +49,9 @@ FinderFileDialog::FinderFileDialog(const Options &options)
+     , m_places(new KFilePlacesModel(this))
+ {
+     setAttribute(Qt::WA_DeleteOnClose, false);
++    // Escape closes the picker from anywhere in it: the file view and text
++    // fields would otherwise take it (to clear the selection, say).
++    qApp->installEventFilter(this);
+     resize(960, 600);
+ 
+     // Toolbar: back/forward, the folder title (over a hidden path field), icon/list views.
+@@ -370,12 +374,25 @@ void FinderFileDialog::closeEvent(QCloseEvent *event)
+     cancel();
+ }
+ 
+-void FinderFileDialog::keyPressEvent(QKeyEvent *event)
++bool FinderFileDialog::eventFilter(QObject *watched, QEvent *event)
+ {
+-    if (event->key() == Qt::Key_Escape) {
+-        cancel();
+-        return;
++    if ((event->type() == QEvent::ShortcutOverride || event->type() == QEvent::KeyPress) && static_cast<QKeyEvent *>(event)->key() == Qt::Key_Escape
++        && watched->isWidgetType() && static_cast<QWidget *>(watched)->window() == this && isVisible()) {
++        // A popup of ours (the file-type menu, a completion list) closes first.
++        if (QApplication::activePopupWidget()) {
++            return false;
++        }
++        if (event->type() == QEvent::KeyPress) {
++            cancel();
++        }
++        event->accept();
++        return true;
+     }
++    return QMainWindow::eventFilter(watched, event);
++}
++
++void FinderFileDialog::keyPressEvent(QKeyEvent *event)
++{
+     if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) && m_accept->isEnabled()) {
+         accept();
+         return;
+diff --git a/src/finder/filechooser/finderfiledialog.h b/src/finder/filechooser/finderfiledialog.h
+index d2c11ead3..b235e0dcb 100644
+--- a/src/finder/filechooser/finderfiledialog.h
++++ b/src/finder/filechooser/finderfiledialog.h
+@@ -68,6 +68,7 @@ Q_SIGNALS:
+ protected:
+     void closeEvent(QCloseEvent *event) override;
+     void keyPressEvent(QKeyEvent *event) override;
++    bool eventFilter(QObject *watched, QEvent *event) override;
+ 
+ private:
+     void setFolder(const QUrl &url);
+-- 
+2.56.0
+

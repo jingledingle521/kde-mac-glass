@@ -1,0 +1,18 @@
+{
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "Brhett"
+            }
+        ],
+        "Category": "System Information",
+        "Description": "macOS-style battery status and Energy Mode menu",
+        "Icon": "battery-good",
+        "Id": "org.brhett.macbattery",
+        "License": "GPL-2.0+",
+        "Name": "Mac Battery",
+        "Version": "1.0"
+    },
+    "KPackageStructure": "Plasma/Applet",
+    "X-Plasma-API-Minimum-Version": "6.0"
+}

@@ -1,0 +1,18 @@
+{
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "Brhett"
+            }
+        ],
+        "Category": "System Information",
+        "Description": "macOS-style Sound menu: volume slider and output picker",
+        "Icon": "audio-volume-high",
+        "Id": "org.brhett.macsound",
+        "License": "GPL-2.0+",
+        "Name": "Mac Sound",
+        "Version": "1.0"
+    },
+    "KPackageStructure": "Plasma/Applet",
+    "X-Plasma-API-Minimum-Version": "6.0"
+}

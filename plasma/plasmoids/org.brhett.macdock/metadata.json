@@ -1,0 +1,21 @@
+{
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "Brhett"
+            }
+        ],
+        "Category": "Windows and Tasks",
+        "Description": "macOS-style dock: running dots, launch bounce, keep-in-dock",
+        "Icon": "user-desktop",
+        "Id": "org.brhett.macdock",
+        "License": "GPL-2.0+",
+        "Name": "Mac Dock",
+        "Version": "1.0"
+    },
+    "KPackageStructure": "Plasma/Applet",
+    "X-Plasma-API-Minimum-Version": "6.0",
+    "X-Plasma-Provides": [
+        "org.kde.plasma.multitasking"
+    ]
+}

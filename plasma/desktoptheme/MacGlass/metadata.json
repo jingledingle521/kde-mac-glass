@@ -1,0 +1,22 @@
+{
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "Vince Liuice",
+                "Email": "vinceliuice@hotmail.com"
+            },
+            {
+                "Name": "Brhett"
+            }
+        ],
+        "Category": "Plasma 6.0 theme",
+        "Description": "macOS-style liquid glass panels and dock, based on WhiteSur-dark by Vince Liuice",
+        "EnabledByDefault": true,
+        "Id": "MacGlass",
+        "License": "GPL-3.0",
+        "Name": "Mac Glass",
+        "Version": "1.0",
+        "Website": "https://github.com/vinceliuice"
+    },
+    "X-Plasma-API": "5.0"
+}

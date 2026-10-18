@@ -1,0 +1,296 @@
+From 48352908be21d7373e75739fef9920dad319e2f4 Mon Sep 17 00:00:00 2001
+From: Brhett <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 11:32:13 -0500
+Subject: [PATCH 10/30] Finder: group-by and actions capsules, scroll edge
+ fade, own KXmlGui component
+
+Finder used the 'dolphin' KXmlGui component, so it read and wrote stock
+Dolphin's local toolbar layout. It is now 'finder'.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ src/dolphinmainwindow.cpp             |   6 +-
+ src/dolphinui.rc                      |   3 +-
+ src/finder/finderchrome.cpp           | 103 +++++++++++++++++++++++++-
+ src/finder/finderchrome.h             |   4 +
+ src/kitemviews/kitemlistcontainer.cpp |  34 +++++++++
+ 5 files changed, 146 insertions(+), 4 deletions(-)
+
+diff --git a/src/dolphinmainwindow.cpp b/src/dolphinmainwindow.cpp
+index c70e66555..eedfae81b 100644
+--- a/src/dolphinmainwindow.cpp
++++ b/src/dolphinmainwindow.cpp
+@@ -146,7 +146,8 @@ DolphinMainWindow::DolphinMainWindow()
+ #ifndef Q_OS_WIN
+     setWindowFlags(Qt::WindowContextHelpButtonHint);
+ #endif
+-    setComponentName(QStringLiteral("dolphin"), QGuiApplication::applicationDisplayName());
++    // Finder: its own component, so it never reads or writes stock Dolphin's layout.
++    setComponentName(QStringLiteral("finder"), QGuiApplication::applicationDisplayName());
+     setObjectName(QStringLiteral("Dolphin#"));
+ 
+     setStateConfigGroup("State");
+@@ -251,7 +252,8 @@ DolphinMainWindow::DolphinMainWindow()
+     hamburgerMenu->setShowMenuBarAction(showMenuBarAction);
+     connect(hamburgerMenu, &KHamburgerMenu::aboutToShowMenu, this, &DolphinMainWindow::updateHamburgerMenu);
+     hamburgerMenu->hideActionsOf(toolBar());
+-    if (GeneralSettings::version() < 201 && !toolBar()->actions().contains(hamburgerMenu)) {
++    // Finder: the "…" button and the global menu replace the hamburger menu.
++    if (false && GeneralSettings::version() < 201 && !toolBar()->actions().contains(hamburgerMenu)) {
+         addHamburgerMenuToToolbar();
+     }
+ 
+diff --git a/src/dolphinui.rc b/src/dolphinui.rc
+index 8795db212..92e83d10a 100644
+--- a/src/dolphinui.rc
++++ b/src/dolphinui.rc
+@@ -1,6 +1,6 @@
+ <?xml version="1.0"?>
+ <!DOCTYPE gui SYSTEM "kpartgui.dtd">
+-<gui name="dolphin" version="50">
++<gui name="dolphin" version="51">
+     <MenuBar>
+         <Menu name="file">
+             <Action name="new_menu" />
+@@ -114,6 +114,7 @@
+         <Action name="icons" />
+         <Action name="compact" />
+         <Action name="details" />
++        <Action name="group_by" />
+         <Action name="toggle_search" />
+     </ToolBar>
+     <ActionProperties scheme="Default">
+diff --git a/src/finder/finderchrome.cpp b/src/finder/finderchrome.cpp
+index df840bb89..846ddf346 100644
+--- a/src/finder/finderchrome.cpp
++++ b/src/finder/finderchrome.cpp
+@@ -12,6 +12,10 @@
+ #include <QLineEdit>
+ #include <KWindowEffects>
+ #include <KWindowShadow>
++#include <KActionCollection>
++#include <KLocalizedString>
++#include <KXmlGuiWindow>
++#include <QMenu>
+ 
+ #include <QApplication>
+ #include <QGuiApplication>
+@@ -310,7 +314,22 @@ void FinderChrome::setToolBar(QToolBar *toolBar)
+     };
+     for (QAction *action : actions) {
+         const QString name = action->objectName();
+-        if (name == QLatin1String("icons") || name == QLatin1String("toggle_search")) {
++        if (name == QLatin1String("icons") || name == QLatin1String("group_by") || name == QLatin1String("toggle_search")) {
++            toolBar->insertWidget(action, gap(CapsuleGap + 2 * CapsulePad));
++        }
++        if (name == QLatin1String("group_by")) {
++            // Finder's grouping control opens its menu on click.
++            if (auto *button = qobject_cast<QToolButton *>(toolBar->widgetForAction(action))) {
++                button->setPopupMode(QToolButton::InstantPopup);
++                button->setToolButtonStyle(Qt::ToolButtonIconOnly);
++                button->setIcon(groupIcon());
++                button->setMinimumWidth(52);
++            }
++        }
++        if (name == QLatin1String("toggle_search")) {
++            // Finder's "…" action menu, between grouping and search.
++            QAction *more = toolBar->insertWidget(action, createMoreButton(toolBar));
++            more->setObjectName(QStringLiteral("finder_more"));
+             toolBar->insertWidget(action, gap(CapsuleGap + 2 * CapsulePad));
+         }
+         if (name == QLatin1String("go_back")) {
+@@ -357,6 +376,86 @@ void FinderChrome::setToolBar(QToolBar *toolBar)
+     watchNavigators();
+ }
+ 
++QIcon FinderChrome::groupIcon()
++{
++    // Finder's grouping control: a small grid of items and a chevron.
++    QIcon icon;
++    for (const qreal dpr : {1.0, 1.5, 2.0}) {
++        // Drawn on a 16 px grid, sized like the toolbar's 22 px icons.
++        QPixmap pm(QSize(22, 22) * dpr);
++        pm.setDevicePixelRatio(dpr);
++        pm.fill(Qt::transparent);
++        QPainter p(&pm);
++        p.setRenderHint(QPainter::Antialiasing);
++        p.scale(22.0 / 16.0, 22.0 / 16.0);
++        const QColor ink(255, 255, 255, 225);
++        p.setPen(QPen(ink, 1.0));
++        p.setBrush(Qt::NoBrush);
++        for (int row = 0; row < 2; ++row) {
++            for (int col = 0; col < 2; ++col) {
++                p.drawRoundedRect(QRectF(0.8 + col * 5.6, 2.8 + row * 5.6, 4.0, 4.0), 1.1, 1.1);
++            }
++        }
++        p.setPen(QPen(ink, 1.1, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
++        p.drawPolyline(QPolygonF{QPointF(12.2, 7.0), QPointF(13.8, 8.6), QPointF(15.4, 7.0)});
++        p.end();
++        icon.addPixmap(pm);
++    }
++    return icon;
++}
++
++QToolButton *FinderChrome::createMoreButton(QToolBar *toolBar)
++{
++    auto *button = new QToolButton(toolBar);
++    // Three horizontal dots, drawn so they don't depend on the icon theme.
++    QIcon dots;
++    for (const qreal dpr : {1.0, 1.5, 2.0}) {
++        QPixmap pm(QSize(16, 16) * dpr);
++        pm.setDevicePixelRatio(dpr);
++        pm.fill(Qt::transparent);
++        QPainter p(&pm);
++        p.setRenderHint(QPainter::Antialiasing);
++        p.setPen(Qt::NoPen);
++        p.setBrush(QColor(255, 255, 255, 225));
++        for (const qreal x : {3.0, 8.0, 13.0}) {
++            p.drawEllipse(QPointF(x, 8), 1.6, 1.6);
++        }
++        p.end();
++        dots.addPixmap(pm);
++    }
++    button->setIcon(dots);
++    button->setToolTip(i18nc("@info:tooltip Finder toolbar", "Show actions for the selected items"));
++    button->setPopupMode(QToolButton::InstantPopup);
++    auto *menu = new QMenu(button);
++    button->setMenu(menu);
++    connect(menu, &QMenu::aboutToShow, this, [this, menu]() {
++        // Rebuilt each time so it follows the current selection.
++        menu->clear();
++        auto *window = qobject_cast<KXmlGuiWindow *>(m_window);
++        if (!window) {
++            return;
++        }
++        KActionCollection *ac = window->actionCollection();
++        const QList<QStringList> sections = {
++            {QStringLiteral("create_dir"), QStringLiteral("new_menu")},
++            {QStringLiteral("properties"), QStringLiteral("renamefile"), QStringLiteral("duplicate"), QStringLiteral("movetotrash")},
++            {QStringLiteral("edit_copy"), QStringLiteral("copy_location"), QStringLiteral("edit_paste")},
++            {QStringLiteral("sort"), QStringLiteral("show_hidden_files"), QStringLiteral("open_terminal_here")},
++        };
++        for (const QStringList &section : sections) {
++            if (!menu->isEmpty()) {
++                menu->addSeparator();
++            }
++            for (const QString &name : section) {
++                if (QAction *action = ac->action(name); action && action->isVisible()) {
++                    menu->addAction(action);
++                }
++            }
++        }
++    });
++    return button;
++}
++
+ void FinderChrome::updateTitle()
+ {
+     if (!m_title) {
+@@ -407,6 +506,8 @@ void FinderChrome::paintCapsules(QPainter &p)
+     static const QList<QStringList> groups = {
+         {QStringLiteral("go_back"), QStringLiteral("go_forward")},
+         {QStringLiteral("icons"), QStringLiteral("compact"), QStringLiteral("details")},
++        {QStringLiteral("group_by")},
++        {QStringLiteral("finder_more")},
+         {QStringLiteral("toggle_search")},
+     };
+     p.setRenderHint(QPainter::Antialiasing);
+diff --git a/src/finder/finderchrome.h b/src/finder/finderchrome.h
+index cbaae7165..ae408c4a4 100644
+--- a/src/finder/finderchrome.h
++++ b/src/finder/finderchrome.h
+@@ -7,6 +7,7 @@
+ #ifndef FINDERCHROME_H
+ #define FINDERCHROME_H
+ 
++#include <QIcon>
+ #include <QObject>
+ #include <QPointer>
+ 
+@@ -16,6 +17,7 @@ class QAction;
+ class QLabel;
+ class QPainter;
+ class QToolBar;
++class QToolButton;
+ class QWidget;
+ 
+ /**
+@@ -47,6 +49,8 @@ protected:
+ private:
+     void paintBackground();
+     void updateTitle();
++    QToolButton *createMoreButton(QToolBar *toolBar);
++    static QIcon groupIcon();
+     void updateTitleColor();
+     void updateLead();
+     void paintCapsules(QPainter &p);
+diff --git a/src/kitemviews/kitemlistcontainer.cpp b/src/kitemviews/kitemlistcontainer.cpp
+index 1ac989c9a..c4ec0bd36 100644
+--- a/src/kitemviews/kitemlistcontainer.cpp
++++ b/src/kitemviews/kitemlistcontainer.cpp
+@@ -18,6 +18,8 @@
+ #include <QApplication>
+ #include <QFontMetrics>
+ #include <QGraphicsScene>
++#include <QLinearGradient>
++#include <QPainter>
+ #include <QGraphicsView>
+ #include <QScrollBar>
+ #include <QScroller>
+@@ -61,6 +63,26 @@ void KItemListContainerViewport::wheelEvent(QWheelEvent *event)
+     event->ignore();
+ }
+ 
++namespace
++{
++/** Finder's scroll edge: items fade out as they scroll up toward the toolbar. */
++class ScrollEdgeFade : public QWidget
++{
++public:
++    using QWidget::QWidget;
++
++protected:
++    void paintEvent(QPaintEvent *) override
++    {
++        QPainter p(this);
++        QLinearGradient fade(0, 0, 0, height());
++        fade.setColorAt(0, QColor(32, 32, 37, 245)); // Finder's content color
++        fade.setColorAt(1, QColor(32, 32, 37, 0));
++        p.fillRect(rect(), fade);
++    }
++};
++}
++
+ KItemListContainer::KItemListContainer(KItemListController *controller, QWidget *parent)
+     : QAbstractScrollArea(parent)
+     , m_controller(controller)
+@@ -75,6 +97,15 @@ KItemListContainer::KItemListContainer(KItemListController *controller, QWidget
+     setViewport(graphicsView);
+     setFrameShape(QFrame::NoFrame); // Finder: no box around the files
+ 
++    auto *fade = new ScrollEdgeFade(this);
++    fade->setObjectName(QStringLiteral("finderScrollEdge"));
++    fade->setAttribute(Qt::WA_TransparentForMouseEvents);
++    fade->hide();
++    connect(verticalScrollBar(), &QScrollBar::valueChanged, fade, [fade](int value) {
++        fade->setVisible(value > 0);
++        fade->raise();
++    });
++
+     m_horizontalSmoothScroller = new KItemListSmoothScroller(horizontalScrollBar(), this);
+     m_verticalSmoothScroller = new KItemListSmoothScroller(verticalScrollBar(), this);
+ 
+@@ -172,6 +203,9 @@ void KItemListContainer::showEvent(QShowEvent *event)
+ void KItemListContainer::resizeEvent(QResizeEvent *event)
+ {
+     QAbstractScrollArea::resizeEvent(event);
++    if (auto *fade = findChild<QWidget *>(QStringLiteral("finderScrollEdge"), Qt::FindDirectChildrenOnly)) {
++        fade->setGeometry(0, 0, viewport()->width(), 28);
++    }
+     updateGeometries();
+ }
+ 
+-- 
+2.56.0
+

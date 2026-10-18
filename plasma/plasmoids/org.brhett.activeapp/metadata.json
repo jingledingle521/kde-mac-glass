@@ -1,0 +1,18 @@
+{
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "Brhett"
+            }
+        ],
+        "Category": "Windows and Tasks",
+        "Description": "Bold name of the active app, as in the macOS menu bar",
+        "Icon": "window",
+        "Id": "org.brhett.activeapp",
+        "License": "GPL-2.0+",
+        "Name": "Active App Name",
+        "Version": "1.0"
+    },
+    "KPackageStructure": "Plasma/Applet",
+    "X-Plasma-API-Minimum-Version": "6.0"
+}

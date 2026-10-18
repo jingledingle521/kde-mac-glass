@@ -1,0 +1,17 @@
+{
+    "KPackageStructure": "Plasma/LookAndFeel",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "Brhett"
+            }
+        ],
+        "Category": "",
+        "Description": "macOS-style desktop: liquid glass menu bar and dock with Mac widgets",
+        "Id": "org.brhett.macglass",
+        "License": "GPL-2.0+",
+        "Name": "Mac Glass",
+        "Version": "1.0"
+    },
+    "X-Plasma-MainScript": "defaults"
+}

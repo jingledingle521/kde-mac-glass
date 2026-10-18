@@ -1,0 +1,18 @@
+{
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "Brhett"
+            }
+        ],
+        "Category": "System Information",
+        "Description": "macOS-style clipboard history with search and pinned items",
+        "Icon": "klipper",
+        "Id": "org.brhett.macclipboard",
+        "License": "GPL-2.0+",
+        "Name": "Mac Clipboard",
+        "Version": "1.0"
+    },
+    "KPackageStructure": "Plasma/Applet",
+    "X-Plasma-API-Minimum-Version": "6.0"
+}
