@@ -60,8 +60,8 @@ function isPopupWindow(window) {
 var fadingPopupsEffect = {
     loadConfig: function () {
         // Mac Glass: snappy, macOS-like popups (stock: 150 ms in, 600 ms out).
-        fadingPopupsEffect.fadeInDuration = animationTime(60);
-        fadingPopupsEffect.fadeOutDuration = animationTime(100);
+        fadingPopupsEffect.fadeInDuration = animationTime(30);
+        fadingPopupsEffect.fadeOutDuration = animationTime(50);
     },
     slotWindowAdded: function (window) {
         if (effects.hasActiveFullScreenEffect) {

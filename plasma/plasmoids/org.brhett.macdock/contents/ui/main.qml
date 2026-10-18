@@ -33,6 +33,103 @@ PlasmoidItem {
     Layout.preferredHeight: Layout.minimumHeight
     Layout.maximumHeight: Layout.minimumHeight
 
+    // The right-click menu every dock icon shares, and the helper that lists
+    // and runs apps' extra actions ("New Private Window"…).
+    readonly property alias menu: dockMenu
+    readonly property string actionsHelper: Qt.resolvedUrl("../code/actions.py").toString().replace("file://", "")
+    property var appActions: ({}) // launcher URL -> [{id, name, icon}]
+
+    function shellQuote(s) {
+        return "'" + String(s).replace(/'/g, "'\\''") + "'";
+    }
+
+    function run(command, callback) {
+        executable.exec(command, callback);
+    }
+
+    // Loads (once) the extra actions of the app behind `launcherUrl`.
+    function loadAppActions(launcherUrl, callback) {
+        const key = String(launcherUrl);
+        if (key === "" || appActions[key] !== undefined) {
+            if (callback) {
+                callback(appActions[key] || []);
+            }
+            return;
+        }
+        run("python3 -I " + shellQuote(actionsHelper) + " list " + shellQuote(key), out => {
+            let list = [];
+            try {
+                list = JSON.parse(out) || [];
+            } catch (e) {
+                list = [];
+            }
+            const cache = appActions;
+            cache[key] = list;
+            appActions = cache;
+            if (callback) {
+                callback(list);
+            }
+        });
+    }
+
+    function runAppAction(launcherUrl, id) {
+        run("python3 -I " + shellQuote(actionsHelper) + " run " + shellQuote(String(launcherUrl)) + " " + shellQuote(id));
+    }
+
+    // Shows only `winIds` in KWin's window overview ("Show All Windows").
+    function showWindows(winIds) {
+        const ids = winIds.map(id => "'" + String(id).replace(/'/g, "") + "'").join(",");
+        run("gdbus call --session --dest org.kde.KWin --object-path /org/kde/KWin/Effect/WindowView1 --method org.kde.KWin.Effect.WindowView1.activate " + shellQuote("[" + ids + "]"));
+    }
+
+    DockMenu {
+        id: dockMenu
+        dock: root
+    }
+
+    // Places a popup (bubble or menu) centred on the icon `anchor`, `gap`
+    // pixels clear of it, before it is shown: Plasma's own popup placement
+    // sized these wrong, and Wayland won't move a window once it is showing.
+    // Measured from the icon, not the panel window (which is taller than the
+    // dock you see and moves as the dock hides and shows).
+    function placePopup(dialog, anchor, gap) {
+        const win = anchor && anchor.Window ? anchor.Window.window : null;
+        if (!win) {
+            return false;
+        }
+        const pos = anchor.mapToItem(null, 0, 0);
+        const left = win.x + pos.x;
+        const top = win.y + pos.y;
+        const screen = Plasmoid.containment.screenGeometry;
+        // The size the window will have: its own can lag a frame behind its
+        // content, and placing by that put popups over the icon.
+        const item = dialog.mainItem;
+        const m = dialog.margins;
+        const w = item ? item.width + (m ? m.left + m.right : 0) : dialog.width;
+        const h = item ? item.height + (m ? m.top + m.bottom : 0) : dialog.height;
+        let x, y;
+        switch (Plasmoid.location) {
+        case PlasmaCore.Types.LeftEdge:
+            x = left + anchor.width + gap;
+            y = top + (anchor.height - h) / 2;
+            break;
+        case PlasmaCore.Types.RightEdge:
+            x = left - w - gap;
+            y = top + (anchor.height - h) / 2;
+            break;
+        case PlasmaCore.Types.TopEdge:
+            x = left + (anchor.width - w) / 2;
+            y = top + anchor.height + gap;
+            break;
+        default: // bottom dock
+            x = left + (anchor.width - w) / 2;
+            y = top - h - gap;
+        }
+        dialog.x = Math.round(Math.max(screen.x, Math.min(x, screen.x + screen.width - w)));
+        dialog.y = Math.round(Math.max(screen.y, Math.min(y, screen.y + screen.height - h)));
+        return true;
+    }
+
     function saveLaunchers() {
         if (String(Plasmoid.configuration.launchers) !== String(tasksModel.launcherList)) {
             Plasmoid.configuration.launchers = tasksModel.launcherList;

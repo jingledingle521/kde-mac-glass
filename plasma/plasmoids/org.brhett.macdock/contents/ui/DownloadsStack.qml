@@ -50,11 +50,11 @@ Item {
         opacity: mouse.pressed ? 0.65 : 1
     }
 
-    PlasmaCore.ToolTipArea {
-        anchors.fill: parent
-        mainText: i18n("Downloads")
-        location: Plasmoid.location
-        active: !popup.visible
+    DockBubble {
+        dock: stack.dock
+        anchor: stack
+        text: i18n("Downloads")
+        shown: mouse.containsMouse && !mouse.pressed && !popup.visible && !stack.dock.menu.opened
     }
 
     MouseArea {
@@ -66,6 +66,7 @@ Item {
 
         anchors.fill: parent
         acceptedButtons: Qt.LeftButton | Qt.RightButton
+        hoverEnabled: true
         onPressed: wasOpen = popup.visible
         onClicked: mouseEvent => {
             if (mouseEvent.button === Qt.RightButton) {

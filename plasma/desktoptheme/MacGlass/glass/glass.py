@@ -29,6 +29,9 @@ def set_blur(level):
 def set_tint(level):
     subprocess.run([sys.executable, '-I', os.path.join(HERE, 'make_panel.py'), os.path.join(HERE, 'panel-base.svg'),
                     os.path.join(THEME, 'widgets', 'panel-background.svgz'), str(level)], check=True)
+    # Tooltips (and the dock's name bubbles) share the dock's glass.
+    subprocess.run([sys.executable, '-I', os.path.join(HERE, 'make_tooltip.py'), os.path.join(HERE, 'tooltip-base.svg'),
+                    os.path.join(THEME, 'widgets', 'tooltip.svgz'), str(level)], check=True)
     with open(os.path.join(HERE, 'level'), 'w') as f:
         f.write(f'{level}\n')
     # Plasma doesn't watch theme files; switching away and back reloads the style.

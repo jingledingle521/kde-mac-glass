@@ -1,7 +1,6 @@
 import QtQuick
 import org.kde.plasma.plasmoid
 import org.kde.plasma.core as PlasmaCore
-import org.kde.plasma.extras as PlasmaExtras
 import org.kde.kirigami as Kirigami
 import org.kde.taskmanager as TaskManager
 
@@ -64,11 +63,106 @@ Item {
         PauseAnimation { duration: 120 }
     }
 
-    PlasmaCore.ToolTipArea {
-        anchors.fill: parent
-        mainText: item.model.AppName || item.model.display || ""
-        location: Plasmoid.location
-        active: !contextMenu.opened && !mouse.dragging
+    // macOS dock label: the app's name in a glass bubble above the icon,
+    // shown at once on hover (no tooltip delay), hidden while dragging,
+    // pressing or with the menu open.
+    readonly property string appName: model.AppName || model.display || ""
+    readonly property bool bubbleWanted: mouse.containsMouse && !mouse.pressed && !mouse.dragging && !dock.menu.opened && appName !== ""
+
+    // Have the app's actions ready for a right-click.
+    onBubbleWantedChanged: if (bubbleWanted) dock.loadAppActions(launcherUrl)
+
+    DockBubble {
+        dock: item.dock
+        anchor: item
+        text: item.appName
+        shown: item.bubbleWanted
+    }
+
+    // ---- right-click menu ---------------------------------------------------
+    // macOS order: the app's open windows (✓ on the front one), then its own
+    // actions, Keep in Dock, and Show All Windows / Hide / Quit.
+    function windowIndexes() {
+        if (!running) {
+            return [];
+        }
+        const parent = modelIndex();
+        if (!model.IsGroupParent) {
+            return [parent];
+        }
+        const list = [];
+        for (let i = 0; i < tasks.rowCount(parent); ++i) {
+            list.push(tasks.makeModelIndex(index, i));
+        }
+        return list;
+    }
+
+    function menuEntries(appActions) {
+        const entries = [];
+        const windows = windowIndexes();
+        for (const w of windows) {
+            const title = tasks.data(w, Qt.DisplayRole) || appName;
+            const minimized = tasks.data(w, TaskManager.AbstractTasksModel.IsMinimized) === true;
+            entries.push({
+                label: minimized ? "◆ " + title : title,
+                check: tasks.data(w, TaskManager.AbstractTasksModel.IsActive) === true ? 1 : 0,
+                trigger: () => tasks.requestActivate(w)
+            });
+        }
+        if (windows.length > 0) {
+            entries.push({separator: true});
+        }
+
+        // The app's own actions ("New Private Window"); the dock's generic
+        // New Window only if the app has none of its own.
+        const ownNewWindow = appActions.some(a => /new window/i.test(a.name));
+        if (running && !ownNewWindow) {
+            entries.push({label: i18n("New Window"), trigger: () => tasks.requestNewInstance(modelIndex())});
+        }
+        for (const action of appActions) {
+            entries.push({label: action.name, trigger: () => dock.runAppAction(launcherUrl, action.id)});
+        }
+        if (!running) {
+            entries.unshift({label: i18n("Open"), trigger: () => tasks.requestActivate(modelIndex())});
+        }
+        if (entries.length > 0 && !entries[entries.length - 1].separator) {
+            entries.push({separator: true});
+        }
+
+        if (launcherUrl.toString() !== "") {
+            entries.push({
+                label: i18n("Keep in Dock"),
+                check: pinned ? 1 : 0,
+                trigger: () => pinned ? tasks.requestRemoveLauncher(launcherUrl) : tasks.requestAddLauncher(launcherUrl)
+            });
+        }
+
+        if (running) {
+            entries.push({separator: true});
+            const ids = model.WinIdList || [];
+            if (windows.length > 1 && ids.length > 0) {
+                entries.push({label: i18n("Show All Windows"), trigger: () => dock.showWindows(ids)});
+            }
+            entries.push({
+                label: i18n("Hide"),
+                trigger: () => {
+                    for (const w of windowIndexes()) {
+                        if (tasks.data(w, TaskManager.AbstractTasksModel.IsMinimized) !== true) {
+                            tasks.requestToggleMinimized(w);
+                        }
+                    }
+                }
+            });
+            entries.push({label: i18n("Quit"), trigger: () => tasks.requestClose(modelIndex())});
+        }
+        // Entries with a check column get it for all rows; only windows and
+        // Keep in Dock carry one, as in macOS.
+        return entries;
+    }
+
+    function openMenu() {
+        refreshPinned();
+        dock.loadAppActions(launcherUrl, actions => dock.menu.popup(item, menuEntries(actions)));
     }
 
     MouseArea {
@@ -114,54 +208,12 @@ Item {
                 return;
             }
             if (mouseEvent.button === Qt.RightButton) {
-                item.refreshPinned();
-                contextMenu.openRelative();
+                item.openMenu();
             } else if (mouseEvent.button === Qt.MiddleButton) {
                 item.tasks.requestNewInstance(item.modelIndex());
             } else {
                 item.tasks.requestActivate(item.modelIndex());
             }
-        }
-    }
-
-    PlasmaExtras.Menu {
-        id: contextMenu
-
-        property bool opened: status === PlasmaExtras.Menu.Open
-
-        visualParent: item
-        placement: item.dock.vertical ? PlasmaExtras.Menu.RightPosedTopAlignedPopup : PlasmaExtras.Menu.TopPosedLeftAlignedPopup
-
-        PlasmaExtras.MenuItem {
-            text: item.running ? i18n("New Window") : i18n("Open")
-            icon: item.running ? "window-new" : "media-playback-start"
-            onClicked: item.running ? item.tasks.requestNewInstance(item.modelIndex()) : item.tasks.requestActivate(item.modelIndex())
-        }
-        PlasmaExtras.MenuItem {
-            separator: true
-        }
-        PlasmaExtras.MenuItem {
-            text: i18n("Keep in Dock")
-            checkable: true
-            checked: item.pinned
-            visible: item.launcherUrl.toString() !== ""
-            onClicked: {
-                if (item.pinned) {
-                    item.tasks.requestRemoveLauncher(item.launcherUrl);
-                } else {
-                    item.tasks.requestAddLauncher(item.launcherUrl);
-                }
-            }
-        }
-        PlasmaExtras.MenuItem {
-            separator: true
-            visible: item.running
-        }
-        PlasmaExtras.MenuItem {
-            text: i18n("Quit")
-            icon: "application-exit"
-            visible: item.running
-            onClicked: item.tasks.requestClose(item.modelIndex())
         }
     }
 }

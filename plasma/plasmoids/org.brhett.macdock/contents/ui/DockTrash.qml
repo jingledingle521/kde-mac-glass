@@ -3,7 +3,6 @@ import QtQuick
 import Qt.labs.folderlistmodel
 import org.kde.plasma.plasmoid
 import org.kde.plasma.core as PlasmaCore
-import org.kde.plasma.extras as PlasmaExtras
 import org.kde.kirigami as Kirigami
 
 // Trash at the end of the dock: empty/full icon, click to open, drop files
@@ -44,20 +43,25 @@ Item {
         }
     }
 
-    PlasmaCore.ToolTipArea {
-        anchors.fill: parent
-        mainText: i18n("Trash")
-        location: Plasmoid.location
-        active: !menu.opened
+    DockBubble {
+        dock: trash.dock
+        anchor: trash
+        text: i18n("Trash")
+        shown: mouse.containsMouse && !mouse.pressed && !trash.dock.menu.opened
     }
 
     MouseArea {
         id: mouse
         anchors.fill: parent
         acceptedButtons: Qt.LeftButton | Qt.RightButton
+        hoverEnabled: true
         onClicked: mouseEvent => {
             if (mouseEvent.button === Qt.RightButton) {
-                menu.openRelative();
+                trash.dock.menu.popup(trash, [
+                    {label: i18n("Open"), trigger: () => trash.run("setsid -f xdg-open trash:/ >/dev/null 2>&1", null)},
+                    {separator: true},
+                    {label: i18n("Empty Trash"), enabled: trash.full, trigger: () => trash.run("ktrash6 --empty", null)}
+                ]);
             } else {
                 trash.run("setsid -f xdg-open trash:/ >/dev/null 2>&1", null);
             }
@@ -74,27 +78,6 @@ Item {
                 trash.run("kioclient move " + urls + " trash:/", null);
                 dropEvent.accept(Qt.MoveAction);
             }
-        }
-    }
-
-    PlasmaExtras.Menu {
-        id: menu
-
-        property bool opened: status === PlasmaExtras.Menu.Open
-
-        visualParent: trash
-        placement: PlasmaExtras.Menu.TopPosedLeftAlignedPopup
-
-        PlasmaExtras.MenuItem {
-            text: i18n("Open")
-            icon: "document-open-folder"
-            onClicked: trash.run("setsid -f xdg-open trash:/ >/dev/null 2>&1", null)
-        }
-        PlasmaExtras.MenuItem {
-            text: i18n("Empty Trash")
-            icon: "trash-empty"
-            enabled: trash.full
-            onClicked: trash.run("ktrash6 --empty", null)
         }
     }
 }
