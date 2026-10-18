@@ -33,7 +33,7 @@ Item {
         width: trash.dock.iconSize
         height: width
         x: (parent.width - width) / 2
-        y: (parent.height - height - trash.dock.dotSize * 1.6) / 2
+        y: Math.round((parent.height - height - trash.dock.dotSize * 1.6) / 2)
         source: trash.full ? "user-trash-full" : "user-trash"
         roundToIconSize: false
         opacity: mouse.pressed ? 0.65 : 1

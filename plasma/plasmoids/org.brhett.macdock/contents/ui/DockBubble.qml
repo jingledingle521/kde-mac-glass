@@ -41,7 +41,7 @@ Item {
         if (shown && text !== "") {
             if (place()) {
                 body.visible = true;
-                tailWindow.visible = Plasmoid.location === PlasmaCore.Types.BottomEdge || Plasmoid.location === PlasmaCore.Types.Floating;
+                tailWindow.visible = true;
             }
         } else {
             body.visible = false;

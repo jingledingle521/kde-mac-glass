@@ -34,9 +34,9 @@ Item {
         id: icon
         width: item.dock.iconSize
         height: width
-        x: (parent.width - width) / 2
+        x: Math.round((parent.width - width) / 2)
         // Leave room under the icon for the running dot.
-        y: (parent.height - height - item.dock.dotSize * 1.6) / 2 - item.bounceY
+        y: Math.round((parent.height - height - item.dock.dotSize * 1.6) / 2) - item.bounceY
         source: item.model.decoration
         roundToIconSize: false
         opacity: mouse.pressed ? 0.65 : 1
@@ -46,7 +46,7 @@ Item {
         width: item.dock.dotSize
         height: width
         radius: width / 2
-        x: (parent.width - width) / 2
+        x: Math.round((parent.width - width) / 2)
         y: icon.y + icon.height + item.dock.dotSize * 0.6 + item.bounceY
         color: Kirigami.Theme.textColor
         opacity: 0.8

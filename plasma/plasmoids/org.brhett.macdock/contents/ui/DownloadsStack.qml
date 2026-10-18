@@ -44,7 +44,7 @@ Item {
         width: stack.dock.iconSize
         height: width
         x: (parent.width - width) / 2
-        y: (parent.height - height - stack.dock.dotSize * 1.6) / 2
+        y: Math.round((parent.height - height - stack.dock.dotSize * 1.6) / 2)
         source: "folder-downloads"
         roundToIconSize: false
         opacity: mouse.pressed ? 0.65 : 1
@@ -77,7 +77,12 @@ Item {
                 popup.visible = false;
             } else {
                 stack.refresh();
-                popup.visible = true;
+                // Placed by the dock while hidden, once it has its size.
+                Qt.callLater(() => {
+                    if (stack.dock.placePopup(popup, stack, Kirigami.Units.gridUnit)) {
+                        popup.visible = true;
+                    }
+                });
             }
         }
     }
@@ -85,9 +90,10 @@ Item {
     PlasmaCore.Dialog {
         id: popup
 
-        visualParent: stack
-        location: Plasmoid.location
+        location: PlasmaCore.Types.Floating
         type: PlasmaCore.Dialog.PopupMenu
+        // The files arrive after it opens: keep it sitting on the dock.
+        onHeightChanged: if (visible) stack.dock.placePopup(popup, stack, Kirigami.Units.gridUnit)
         hideOnWindowDeactivate: true
         flags: Qt.WindowStaysOnTopHint
 

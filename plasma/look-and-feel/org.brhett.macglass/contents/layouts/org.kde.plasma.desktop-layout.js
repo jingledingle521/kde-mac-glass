@@ -56,16 +56,10 @@ add(bar, "org.kde.plasma.digitalclock", { Appearance: {
 } });
 add(bar, "org.brhett.macnotifications");
 
-// Dock
-var dock = new Panel;
-dock.location = "bottom";
-dock.height = 62;
-dock.hiding = "dodgewindows";
-dock.floating = true;
-dock.lengthMode = "fit";
-dock.alignment = "center";
-dock.opacity = "translucent";
-add(dock, "org.brhett.macdock", { General: { launchers: [
+// Dock. Not a panel: the widget sits invisibly in the menu bar and draws the
+// dock in its own window along the bottom of the screen (Plasma moves and
+// resizes panels in two steps, which made a panel dock shake when resized).
+add(bar, "org.brhett.macdock", { General: { dockSize: 62, launchers: [
     "applications:org.kde.dolphin.desktop",
     "preferred://browser",
     "applications:org.kde.konsole.desktop",

@@ -13,10 +13,12 @@ and Mac-style widgets for the menu bar.
 | `aurorae/MacSequoia-Dark` | Window decoration (stoplight buttons on the left, 28px title bar) |
 | `wallpapers/GoldenGate` | Golden Gate wallpaper |
 | `fonts/` | Inter (UI font) |
+| `extras/dock-helper` | The dock's window helper (QML module `org.brhett.macdock`): KWin blur behind the dock's glass, clicks pass through the rest. Built by `install.sh` (needs build tools, listed in its `install.sh`) |
+| `extras/menu-style` | Optional **MacGlass widget style**: Breeze with every app's menus drawn like macOS (frosted rounded panel, blue hover, ⌃⇧⌘ shortcuts). `./install.sh --menus`; `extras/menu-style/install.sh --off` goes back to Breeze |
 | `extras/lockscreen` | Optional Golden Gate lock screen |
 | `extras/tray-patch` | Optional patched system tray: 16px icons, icon-grid overflow popup |
 | `extras/vivaldi-menu` | Optional File/Edit/View/History/Bookmarks/Window/Help for Vivaldi in KDE's global menu (`install.sh`, load the extension once; Vivaldi runs natively on Wayland, `install.sh --x11` for the stock Global Menu widget) |
-| `extras/kvantum` | Optional Mac-style menus for Plasma's own menus (global, right-click, tray): rounded glass with a blue hover. Needs `kvantum` |
+| `extras/kvantum` | Older alternative to `extras/menu-style` for Plasma's own menus only (needs `kvantum`) |
 | `extras/finder` | Finder: Dolphin rebuilt as a Golden Gate Finder (frameless glass window, sidebar, toolbar capsules, Finder selection and footer). Separate app; stock Dolphin is untouched. `./install.sh --finder` or `extras/finder/build-finder [--deps]`. Also: column view, Finder-style Open/Save windows for other apps (through xdg-desktop-portal; set up by the installer, asks for your password once), and AirDrop with iPhones and Macs (sidebar, Ctrl+Shift+R, right-click › Share › AirDrop, progress cards) once `./install.sh --airdrop` (or `extras/finder/install-airdrop`) has set up [omdrop-owl](https://github.com/t4t5/omdrop-owl) and [omdrop](https://github.com/netmojo-systems/omdrop-plugin). On Intel Wi-Fi, Wi-Fi disconnects while AirDrop is on. |
 | `extras/dolphin` | Optional Finder-style Dolphin toolbar and sidebar (`finder-style.sh`, with Dolphin closed) |
 | `extras/sddm` | Optional Golden Gate login screen for SDDM (`install-sddm.sh`; Fedora, needs sudo) |
@@ -33,11 +35,26 @@ Add any of these:
 - `--icons` downloads the WhiteSur icon theme and cursors from GitHub if they're missing.
 - `--lockscreen` uses the Golden Gate lock screen. It takes effect after you log out and back in.
 - `--tray-patch` builds the patched system tray. It expects Qt plugins in `/usr/lib64`, as on Fedora or openSUSE.
+- `--menus` draws every app's right-click and app menus like macOS (the MacGlass widget style).
+
+The installer always builds the dock's small window helper, so it needs a C++
+toolchain with Qt and KDE Frameworks headers (on Fedora:
+`sudo dnf install cmake ninja-build gcc-c++ extra-cmake-modules qt6-qtbase-devel qt6-qtdeclarative-devel kf6-kwindowsystem-devel`).
 
 Without `--apply`, pick it later in **System Settings → Colors & Themes → Global
 Theme → Mac Glass**, and tick **Desktop and window layout** to get the menu bar and dock.
 
 **Meta+V** opens the Clipboard widget.
+
+### Dock
+
+The dock isn't a Plasma panel: its widget sits invisibly in the menu bar and
+draws the dock in its own window along the bottom of the screen. (Plasma moves
+and resizes a panel's window in two separate steps, a frame apart, so a panel
+dock shook while it was resized.) Hover an icon for its name, right-click for
+its windows and actions, drag icons to reorder, and drag the divider before
+Downloads and Trash up or down to resize the dock, as on macOS. Maximized
+windows stop above it.
 
 ### Glass level
 

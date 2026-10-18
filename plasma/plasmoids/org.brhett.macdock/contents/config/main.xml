@@ -10,6 +10,9 @@
     <entry name="iconScale" type="Double">
       <default>1.45</default>
     </entry>
+    <entry name="dockSize" type="Int">
+      <default>62</default>
+    </entry>
     <entry name="showSeparator" type="Bool">
       <default>true</default>
     </entry>

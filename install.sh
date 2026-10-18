@@ -6,6 +6,8 @@
 #   ./install.sh --icons       ...and download WhiteSur icons + cursors if missing
 #   ./install.sh --lockscreen  ...and use the Golden Gate lock screen (re-login)
 #   ./install.sh --tray-patch  ...and build the patched system tray (16px icons)
+#   ./install.sh --menus       ...and draw every app's menus like macOS (builds the
+#                              MacGlass widget style: Breeze with Mac menus)
 #   ./install.sh --finder      ...and build Finder, a Golden Gate Finder made
 #                              from Dolphin (needs build tools; ~10 minutes)
 #   ./install.sh --airdrop     ...and set up AirDrop for Finder (omdrop-owl +
@@ -18,16 +20,17 @@ here=$(cd "$(dirname "$0")" && pwd)
 data=${XDG_DATA_HOME:-$HOME/.local/share}
 config=${XDG_CONFIG_HOME:-$HOME/.config}
 
-apply=0 icons=0 lockscreen=0 traypatch=0 finder=0 airdrop=0
+apply=0 icons=0 lockscreen=0 traypatch=0 menus=0 finder=0 airdrop=0
 for arg in "$@"; do
     case $arg in
         --apply) apply=1 ;;
         --icons) icons=1 ;;
         --lockscreen) lockscreen=1 ;;
         --tray-patch) traypatch=1 ;;
+        --menus) menus=1 ;;
         --finder) finder=1 ;;
         --airdrop) airdrop=1 ;;
-        -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $arg" >&2; exit 2 ;;
     esac
 done
@@ -52,6 +55,11 @@ cp "$here"/fonts/* "$data/fonts/MacGlass/"
 fc-cache -f "$data/fonts" >/dev/null 2>&1 || true
 # Drop stale cached copies of the style.
 rm -rf "$HOME"/.cache/plasma_theme_MacGlass*.kcache "$HOME/.cache/ksvg-elements"
+
+# The dock is its own window; this helper gives it KWin blur behind the glass
+# and lets clicks through the rest. Needs build tools (see its install.sh).
+echo "Building the dock's window helper…"
+"$here/extras/dock-helper/install.sh" || echo "  Dock helper build failed: install the build tools listed in extras/dock-helper/install.sh and run it again."
 
 # Snappier popup fades (stock KWin: 150 ms in, 600 ms out).
 mkdir -p "$data/kwin-wayland/effects"
@@ -103,6 +111,11 @@ if [ $traypatch = 1 ]; then
     else
         echo "  Skipping tray patch: it expects Qt plugins in /usr/lib64 (Fedora/openSUSE layout)."
     fi
+fi
+
+if [ $menus = 1 ]; then
+    echo "Building the MacGlass menu style…"
+    "$here/extras/menu-style/install.sh" || echo "  Menu style build failed; run extras/menu-style/install.sh again to see why."
 fi
 
 if [ $finder = 1 ]; then
