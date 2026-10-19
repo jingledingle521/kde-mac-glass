@@ -600,6 +600,8 @@ PlasmoidItem {
             PlasmaComponents3.Label {
                 text: Qt.formatDate(root.now, "ddd MMM d") + " " + Qt.formatTime(root.now, Qt.locale().timeFormat(Locale.ShortFormat))
                 textFormat: Text.PlainText
+                // A point under the system font, like the menu titles.
+                font.pointSize: Kirigami.Theme.defaultFont.pointSize - 1
             }
         }
     }

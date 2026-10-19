@@ -85,6 +85,7 @@ PlasmoidItem {
             PlasmaComponents3.Label {
                 text: i18nc("battery percent", "%1%", root.percent)
                 visible: Plasmoid.configuration.showPercentage && batteries.hasInternalBatteries
+                font.pointSize: Kirigami.Theme.defaultFont.pointSize - 1 // as the menu bar's other text
             }
             BatteryGlyph {
                 Layout.preferredHeight: Kirigami.Units.iconSizes.small
