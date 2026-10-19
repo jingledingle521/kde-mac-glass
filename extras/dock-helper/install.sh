@@ -1,7 +1,8 @@
 #!/bin/bash
-# Build and install the Mac dock's window helper (QML module org.brhett.macdock:
-# KWin blur behind the dock's glass, click-through elsewhere) into ~/.local,
-# and point Plasma at it. The dock widget needs it.
+# Build and install the window helper for the Mac dock and notifications (QML
+# module org.brhett.macdock: KWin blur behind the glass, click-through
+# elsewhere) into ~/.local, and point Plasma at it. The dock and notifications
+# widgets need it.
 #
 # Fedora build deps: sudo dnf install cmake ninja-build gcc-c++ extra-cmake-modules \
 #     qt6-qtbase-devel qt6-qtdeclarative-devel kf6-kwindowsystem-devel

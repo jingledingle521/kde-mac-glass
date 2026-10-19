@@ -24,6 +24,7 @@ rm -f "$config/systemd/user/plasma-kwin_wayland.service.d/goldengate-lockscreen.
       "$HOME/.local/lib64/qt6/plugins/plasma/applets/org.kde.plasma.systemtray.so" \
       "$HOME/.local/lib64/qt6/plugins/plasma/applets/org.kde.plasma.systemtray.so.source-sha256" \
       "$config/systemd/user/plasma-plasmashell.service.d/macdock-qml.conf" \
+      "$config/systemd/user/plasma-plasmashell.service.d/threaded-render.conf" \
       "$config/environment.d/61-macdock-qml.conf" \
       "$HOME/.local/lib64/qt6/plugins/styles/libmacglass.so"
 rm -rf "$HOME/.local/lib64/qt6/qml/org/brhett/macdock"

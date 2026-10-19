@@ -45,16 +45,8 @@ add(bar, "org.brhett.macwifi");
 add(bar, "org.brhett.macsound");
 add(bar, "org.brhett.controlcenter");
 add(bar, "org.kde.plasma.panelspacer", { General: { expanding: false, length: 10 } });
-add(bar, "org.kde.plasma.digitalclock", { Appearance: {
-    autoFontAndSize: false,
-    fontFamily: "Inter",
-    fontSize: 10,
-    fontWeight: 400,
-    dateDisplayFormat: "BesideTime",
-    dateFormat: "custom",
-    customDateFormat: "ddd MMM d"
-} });
-add(bar, "org.brhett.macnotifications");
+// The date and time; clicking it opens Notification Center.
+add(bar, "org.brhett.macnotifications").globalShortcut = "Meta+N";
 
 // Dock. Not a panel: the widget sits invisibly in the menu bar and draws the
 // dock in its own window along the bottom of the screen (Plasma moves and

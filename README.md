@@ -13,7 +13,7 @@ and Mac-style widgets for the menu bar.
 | `aurorae/MacSequoia-Dark` | Window decoration (stoplight buttons on the left, 28px title bar) |
 | `wallpapers/GoldenGate` | Golden Gate wallpaper |
 | `fonts/` | Inter (UI font) |
-| `extras/dock-helper` | The dock's window helper (QML module `org.brhett.macdock`): KWin blur behind the dock's glass, clicks pass through the rest. Built by `install.sh` (needs build tools, listed in its `install.sh`) |
+| `extras/dock-helper` | Window helper for the dock and notifications (QML module `org.brhett.macdock`): KWin blur behind the glass, clicks pass through the rest. Built by `install.sh` (needs build tools, listed in its `install.sh`) |
 | `extras/menu-style` | Optional **MacGlass widget style**: Breeze with every app's menus drawn like macOS (frosted rounded panel, blue hover, ⌃⇧⌘ shortcuts). `./install.sh --menus`; `extras/menu-style/install.sh --off` goes back to Breeze |
 | `extras/lockscreen` | Optional Golden Gate lock screen |
 | `extras/tray-patch` | Optional patched system tray: 16px icons, icon-grid overflow popup |
@@ -36,6 +36,10 @@ Add any of these:
 - `--lockscreen` uses the Golden Gate lock screen. It takes effect after you log out and back in.
 - `--tray-patch` builds the patched system tray. It expects Qt plugins in `/usr/lib64`, as on Fedora or openSUSE.
 - `--menus` draws every app's right-click and app menus like macOS (the MacGlass widget style).
+- `--smooth` runs Plasma's animations at the screen's refresh rate. Qt falls back
+  to 60 fps on some GPUs (seen with NVIDIA), which looks choppy on a 120/240 Hz
+  screen. Delete `~/.config/systemd/user/plasma-plasmashell.service.d/threaded-render.conf`
+  to go back.
 
 The installer always builds the dock's small window helper, so it needs a C++
 toolchain with Qt and KDE Frameworks headers (on Fedora:
@@ -53,8 +57,19 @@ draws the dock in its own window along the bottom of the screen. (Plasma moves
 and resizes a panel's window in two separate steps, a frame apart, so a panel
 dock shook while it was resized.) Hover an icon for its name, right-click for
 its windows and actions, drag icons to reorder, and drag the divider before
-Downloads and Trash up or down to resize the dock, as on macOS. Maximized
-windows stop above it.
+Downloads and Trash up or down to resize the dock, as on macOS. Icons grow in
+when an app opens and shrink away when it quits. Maximized windows stop above it.
+
+### Notification Center
+
+The menu bar's date and time is the Notifications widget: click it (or press
+**Meta+N**) and Notification Center slides in from the right, with each app's
+notifications stacked on glass cards, then a Calendar widget showing today's
+events from your calendar app (KOrganizer's calendars, through Plasma's
+calendar plugin). Click a stack to spread it out; ✕ dismisses a card or
+clears an app. Clicking the Calendar widget opens your default calendar app.
+New notifications slide in as glass banners at the top right. Middle-click the
+clock to toggle Do Not Disturb.
 
 ### Glass level
 

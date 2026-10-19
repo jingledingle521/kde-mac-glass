@@ -46,6 +46,17 @@ PlasmoidItem {
     readonly property int separatorSpace: Plasmoid.configuration.showSeparator ? Math.round(iconSize * 0.4) : 0
     // Glass between the bar's ends and the first and last icons.
     readonly property int endPadding: Math.round((dockSize - iconSize) / 2)
+    // Icons arriving and leaving animate, and the bar's width follows. Off
+    // while the divider is dragged (the bar tracks the pointer) and while the
+    // dock first fills up.
+    property bool animateLayout: false
+    readonly property int layoutDuration: 280
+
+    Timer {
+        running: true
+        interval: 1500
+        onTriggered: root.animateLayout = true
+    }
 
     preferredRepresentation: fullRepresentation
     Plasmoid.backgroundHints: PlasmaCore.Types.NoBackground
@@ -232,19 +243,56 @@ PlasmoidItem {
             x: Math.round((dockWindow.width - width) / 2)
             y: dockWindow.height - root.gap - height
 
-            Flow {
+            Row {
                 id: row
                 x: root.endPadding
                 height: parent.height
-                flow: Flow.LeftToRight
 
-                Repeater {
-                    id: repeater
+                // The apps. A ListView, not a Repeater, so icons can grow in
+                // when an app opens and shrink away when it quits, with their
+                // neighbours sliding over, as on macOS.
+                ListView {
+                    id: taskList
+                    width: contentWidth
+                    height: parent.height
+                    orientation: ListView.Horizontal
+                    interactive: false
                     model: tasksModel
+
+                    Behavior on width {
+                        enabled: root.animateLayout
+                        NumberAnimation { duration: root.layoutDuration; easing.type: Easing.OutCubic }
+                    }
+
                     delegate: DockItem {
                         dock: root
                         tasks: tasksModel
-                        repeaterCount: repeater.count
+                        repeaterCount: taskList.count
+                    }
+
+                    add: Transition {
+                        enabled: root.animateLayout
+                        NumberAnimation { property: "scale"; from: 0.3; to: 1; duration: root.layoutDuration; easing.type: Easing.OutBack }
+                        NumberAnimation { property: "opacity"; from: 0; to: 1; duration: root.layoutDuration * 0.6 }
+                    }
+                    remove: Transition {
+                        enabled: root.animateLayout
+                        NumberAnimation { property: "scale"; to: 0.3; duration: root.layoutDuration; easing.type: Easing.InCubic }
+                        NumberAnimation { property: "opacity"; to: 0; duration: root.layoutDuration }
+                    }
+                    // Neighbours slide into place; the icon being dragged
+                    // itself follows the pointer without animating.
+                    addDisplaced: Transition {
+                        enabled: root.animateLayout
+                        NumberAnimation { property: "x"; duration: root.layoutDuration; easing.type: Easing.OutCubic }
+                    }
+                    removeDisplaced: Transition {
+                        enabled: root.animateLayout
+                        NumberAnimation { property: "x"; duration: root.layoutDuration; easing.type: Easing.OutCubic }
+                    }
+                    moveDisplaced: Transition {
+                        enabled: root.animateLayout
+                        NumberAnimation { property: "x"; duration: root.layoutDuration * 0.7; easing.type: Easing.OutCubic }
                     }
                 }
 
@@ -267,6 +315,7 @@ PlasmoidItem {
                         onPressed: mouse => {
                             startY = mapToItem(null, mouse.x, mouse.y).y;
                             startSize = root.dockSize;
+                            root.animateLayout = false;
                         }
                         onPositionChanged: mouse => {
                             if (pressed) {
@@ -274,7 +323,10 @@ PlasmoidItem {
                                 root.dockSize = Math.max(root.minDockSize, Math.min(root.maxDockSize, size));
                             }
                         }
-                        onReleased: Plasmoid.configuration.dockSize = root.dockSize
+                        onReleased: {
+                            Plasmoid.configuration.dockSize = root.dockSize;
+                            root.animateLayout = true;
+                        }
                     }
 
                     Rectangle {
