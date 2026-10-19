@@ -1,7 +1,7 @@
 From 10f1e5ab8076f16ed8c1f6dda504ac81c7416fd4 Mon Sep 17 00:00:00 2001
 From: Brhett <36874370+jingledingle521@users.noreply.github.com>
 Date: Sun, 18 Oct 2026 11:11:15 -0500
-Subject: [PATCH 07/30] Finder: seamless content area, zoom slider in footer,
+Subject: [PATCH 07/31] Finder: seamless content area, zoom slider in footer,
  active sidebar tint
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

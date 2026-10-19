@@ -1,7 +1,7 @@
 From d80483d3fe672d44eb6707bab1584ba39522b651 Mon Sep 17 00:00:00 2001
 From: Brhett <36874370+jingledingle521@users.noreply.github.com>
 Date: Sun, 18 Oct 2026 12:21:50 -0500
-Subject: [PATCH 13/30] Finder list view: selection spans the whole row
+Subject: [PATCH 13/31] Finder list view: selection spans the whole row
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f

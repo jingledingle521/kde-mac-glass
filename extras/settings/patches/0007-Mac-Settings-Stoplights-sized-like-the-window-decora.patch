@@ -1,0 +1,58 @@
+From 90bb8232c6022891ec651ee2efc90c12c98fbc40 Mon Sep 17 00:00:00 2001
+From: jingledingle521 <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 21:08:29 -0500
+Subject: [PATCH 7/7] Mac Settings: Stoplights sized like the window
+ decorations
+
+The close, minimize and zoom buttons were 12 px circles 8 px apart, smaller
+than the MacSequoia decorations on other windows (~22 px circles 35 px
+apart at 1.5x). Now 14.5 px, 8.8 px apart.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ app/qml/Main.qml | 12 +++++++-----
+ 1 file changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/app/qml/Main.qml b/app/qml/Main.qml
+index 700178e5..337d92fc 100644
+--- a/app/qml/Main.qml
++++ b/app/qml/Main.qml
+@@ -350,9 +350,11 @@ Item {
+ 
+     // The window's close, minimize and zoom buttons, as on macOS: glyphs on
+     // hover, gray while the window is inactive.
++    // Sized like the window decorations' (MacSequoia draws ~22 px circles
++    // 35 px apart at 1.5×), so they match other windows' stoplights.
+     component Stoplights: Row {
+         id: lights
+-        spacing: 8
++        spacing: 8.8
+         readonly property bool lit: systemsettings.windowActive || lightsHover.hovered
+ 
+         HoverHandler {
+@@ -368,9 +370,9 @@ Item {
+             delegate: Rectangle {
+                 id: light
+                 required property var modelData
+-                width: 12
+-                height: 12
+-                radius: 6
++                width: 14.5
++                height: width
++                radius: width / 2
+                 color: !lights.lit ? "#505054" : lightMouse.pressed ? Qt.darker(modelData.color, 1.25) : modelData.color
+                 border.width: 0.5
+                 border.color: Qt.rgba(0, 0, 0, 0.2)
+@@ -381,7 +383,7 @@ Item {
+                     visible: lightsHover.hovered
+                     text: light.modelData.glyph
+                     color: Qt.rgba(0, 0, 0, 0.6)
+-                    font.pixelSize: 11
++                    font.pixelSize: 12
+                     font.bold: true
+                 }
+                 MouseArea {
+-- 
+2.56.0
+

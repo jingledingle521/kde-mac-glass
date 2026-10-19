@@ -1,7 +1,7 @@
 From 69f298d0eccade5c2d28a8a0ba47da6bb3c5f011 Mon Sep 17 00:00:00 2001
 From: Brhett <36874370+jingledingle521@users.noreply.github.com>
 Date: Sun, 18 Oct 2026 15:20:15 -0500
-Subject: [PATCH 29/30] Finder installer: reload the session bus so the file
+Subject: [PATCH 29/31] Finder installer: reload the session bus so the file
  chooser can start
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

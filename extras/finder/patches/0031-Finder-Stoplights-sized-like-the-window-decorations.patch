@@ -1,0 +1,70 @@
+From b72d35a95717583bab523240bea608c9b0b753db Mon Sep 17 00:00:00 2001
+From: Brhett <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 21:08:31 -0500
+Subject: [PATCH 31/31] Finder: Stoplights sized like the window decorations
+
+The close, minimize and zoom buttons were 12 px circles 8 px apart, smaller
+than the MacSequoia decorations on other windows (~22 px circles 35 px
+apart at 1.5x). Now 14.5 px, 8.8 px apart.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ src/finder/finderchrome.cpp | 16 ++++++++++------
+ 1 file changed, 10 insertions(+), 6 deletions(-)
+
+diff --git a/src/finder/finderchrome.cpp b/src/finder/finderchrome.cpp
+index 0acf6722f..718534aac 100644
+--- a/src/finder/finderchrome.cpp
++++ b/src/finder/finderchrome.cpp
+@@ -37,6 +37,7 @@
+ #include <QHBoxLayout>
+ #include <QLabel>
+ #include <QToolButton>
++#include <QtMath>
+ #include <QMainWindow>
+ #include <QMouseEvent>
+ #include <QPainter>
+@@ -133,13 +134,15 @@ public:
+     {
+         setMouseTracking(true);
+         setAttribute(Qt::WA_Hover);
+-        setFixedSize(LeftMargin + 3 * Diameter + 2 * Gap + RightMargin, Diameter + 8);
++        setFixedSize(qCeil(LeftMargin + 3 * Diameter + 2 * Gap + RightMargin), qCeil(Diameter + 8));
+         setToolTip(QString());
+     }
+ 
+ protected:
+-    static constexpr int Diameter = 12;
+-    static constexpr int Gap = 8;
++    // Sized like the window decorations' (MacSequoia draws ~22 px circles
++    // 35 px apart at 1.5×), so they match other windows' stoplights.
++    static constexpr qreal Diameter = 14.5;
++    static constexpr qreal Gap = 8.8;
+     static constexpr int LeftMargin = 8;
+     static constexpr int RightMargin = 14;
+ 
+@@ -180,7 +183,8 @@ protected:
+             // Glyphs, drawn rather than taken from a font so they stay crisp.
+             p.setPen(QPen(QColor(0, 0, 0, 150), 1.2, Qt::SolidLine, Qt::RoundCap));
+             const QPointF m = c.center();
+-            const qreal k = 2.6;
++            const qreal s = Diameter / 12; // glyphs were drawn for 12 px circles
++            const qreal k = 2.6 * s;
+             if (i == 0) {
+                 p.drawLine(m + QPointF(-k, -k), m + QPointF(k, k));
+                 p.drawLine(m + QPointF(-k, k), m + QPointF(k, -k));
+@@ -190,8 +194,8 @@ protected:
+                 // Zoom: two small triangles pointing apart, as on macOS.
+                 p.setPen(Qt::NoPen);
+                 p.setBrush(QColor(0, 0, 0, 150));
+-                QPolygonF a{m + QPointF(-3.2, -3.2), m + QPointF(1.2, -3.2), m + QPointF(-3.2, 1.2)};
+-                QPolygonF b{m + QPointF(3.2, 3.2), m + QPointF(-1.2, 3.2), m + QPointF(3.2, -1.2)};
++                QPolygonF a{m + QPointF(-3.2, -3.2) * s, m + QPointF(1.2, -3.2) * s, m + QPointF(-3.2, 1.2) * s};
++                QPolygonF b{m + QPointF(3.2, 3.2) * s, m + QPointF(-1.2, 3.2) * s, m + QPointF(3.2, -1.2) * s};
+                 p.drawPolygon(a);
+                 p.drawPolygon(b);
+             }
+-- 
+2.56.0
+

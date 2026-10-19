@@ -1,7 +1,7 @@
 From 993df1311da22825b9b2911573a152b307730099 Mon Sep 17 00:00:00 2001
 From: Brhett <36874370+jingledingle521@users.noreply.github.com>
 Date: Sun, 18 Oct 2026 13:58:58 -0500
-Subject: [PATCH 21/30] Finder: README, build/install script, AirDrop
+Subject: [PATCH 21/31] Finder: README, build/install script, AirDrop
  installer, desktop file template
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
