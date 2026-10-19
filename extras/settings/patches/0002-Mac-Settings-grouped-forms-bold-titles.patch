@@ -1,7 +1,7 @@
 From a12a92da4ac1f36e0fe2d6b06bdc312063651c8f Mon Sep 17 00:00:00 2001
 From: jingledingle521 <36874370+jingledingle521@users.noreply.github.com>
 Date: Sun, 18 Oct 2026 20:38:56 -0500
-Subject: [PATCH 2/8] Mac Settings: grouped forms; bold titles
+Subject: [PATCH 2/9] Mac Settings: grouped forms; bold titles
 
 Pages' forms as macOS's grouped panels: Kirigami's new forms in their
 "cards" style (KDE_KIRIGAMI_FORMS_STYLE), and classic FormLayouts

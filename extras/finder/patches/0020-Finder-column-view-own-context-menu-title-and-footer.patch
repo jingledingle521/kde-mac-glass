@@ -1,7 +1,7 @@
 From ddcc2700c4e6ff995a492b2ac7bc6f547062ff04 Mon Sep 17 00:00:00 2001
 From: Brhett <36874370+jingledingle521@users.noreply.github.com>
 Date: Sun, 18 Oct 2026 13:53:56 -0500
-Subject: [PATCH 20/32] Finder column view: own context menu, title and footer
+Subject: [PATCH 20/33] Finder column view: own context menu, title and footer
  follow the active column, hidden files
 
 The column view acts on its own items: Open, Open With, Share > AirDrop,

@@ -1,0 +1,96 @@
+From bdd214e3c89d659075f2804354996db21dc0c59f Mon Sep 17 00:00:00 2001
+From: jingledingle521 <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 21:13:00 -0500
+Subject: [PATCH 9/9] Mac Settings: stoplights 1.5 px higher; drawn, centred
+ glyphs
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The ×, − and + were font characters, which never sit in the middle of
+the circle; they're drawn now (the zoom's two arrows, as Finder's).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ app/qml/Main.qml | 42 +++++++++++++++++++++++++++++++-----------
+ 1 file changed, 31 insertions(+), 11 deletions(-)
+
+diff --git a/app/qml/Main.qml b/app/qml/Main.qml
+index e6083d7c..e6213920 100644
+--- a/app/qml/Main.qml
++++ b/app/qml/Main.qml
+@@ -11,6 +11,7 @@ pragma ComponentBehavior: Bound
+ import QtQuick
+ import QtQuick.Controls as QQC2
+ import QtQuick.Layouts
++import QtQuick.Shapes
+ import org.kde.kirigami as Kirigami
+ import org.kde.coreaddons as KCoreAddons
+ import org.kde.kirigamiaddons.components as KirigamiComponents
+@@ -133,7 +134,7 @@ Item {
+ 
+         Stoplights {
+             Layout.leftMargin: Kirigami.Units.largeSpacing + 2
+-            Layout.topMargin: Kirigami.Units.largeSpacing + 4
++            Layout.topMargin: Kirigami.Units.largeSpacing + 2.5
+         }
+ 
+         Kirigami.SearchField {
+@@ -363,9 +364,9 @@ Item {
+ 
+         Repeater {
+             model: [
+-                { color: "#ff5f57", glyph: "×", action: () => systemsettings.closeWindow() },
+-                { color: "#febc2e", glyph: "−", action: () => systemsettings.minimizeWindow() },
+-                { color: "#28c840", glyph: "+", action: () => systemsettings.toggleMaximized() }
++                { color: "#ff5f57", kind: "close", action: () => systemsettings.closeWindow() },
++                { color: "#febc2e", kind: "minimize", action: () => systemsettings.minimizeWindow() },
++                { color: "#28c840", kind: "zoom", action: () => systemsettings.toggleMaximized() }
+             ]
+             delegate: Rectangle {
+                 id: light
+@@ -377,14 +378,33 @@ Item {
+                 border.width: 0.5
+                 border.color: Qt.rgba(0, 0, 0, 0.2)
+ 
+-                Text {
+-                    anchors.centerIn: parent
+-                    anchors.verticalCenterOffset: -0.5
++                // The glyph, drawn (a font's ×, − and + never sit quite in
++                // the middle): ×, −, and the zoom's two arrows, as Finder.
++                Shape {
++                    id: glyph
++                    anchors.fill: parent
+                     visible: lightsHover.hovered
+-                    text: light.modelData.glyph
+-                    color: Qt.rgba(0, 0, 0, 0.6)
+-                    font.pixelSize: 12
+-                    font.bold: true
++                    preferredRendererType: Shape.CurveRenderer
++                    readonly property real c: light.width / 2
++                    readonly property real k: 2.6 * light.width / 12
++
++                    ShapePath {
++                        strokeColor: light.modelData.kind === "zoom" ? "transparent" : Qt.rgba(0, 0, 0, 0.6)
++                        strokeWidth: 1.4
++                        fillColor: light.modelData.kind === "zoom" ? Qt.rgba(0, 0, 0, 0.6) : "transparent"
++                        capStyle: ShapePath.RoundCap
++                        PathSvg {
++                            readonly property real c: glyph.c
++                            readonly property real k: glyph.k
++                            readonly property real t: 3.2 * light.width / 12
++                            readonly property real u: 1.2 * light.width / 12
++                            path: light.modelData.kind === "close"
++                                ? `M ${c - k} ${c - k} L ${c + k} ${c + k} M ${c - k} ${c + k} L ${c + k} ${c - k}`
++                                : light.modelData.kind === "minimize"
++                                ? `M ${c - k - 0.4} ${c} L ${c + k + 0.4} ${c}`
++                                : `M ${c - t} ${c - t} L ${c + u} ${c - t} L ${c - t} ${c + u} Z M ${c + t} ${c + t} L ${c - u} ${c + t} L ${c + t} ${c - u} Z`
++                        }
++                    }
+                 }
+                 MouseArea {
+                     id: lightMouse
+-- 
+2.56.0
+

@@ -1,7 +1,7 @@
 From a6b58ace098736ce13c0f68421cbdbed7bc22761 Mon Sep 17 00:00:00 2001
 From: Brhett <36874370+jingledingle521@users.noreply.github.com>
 Date: Sun, 18 Oct 2026 09:50:19 -0500
-Subject: [PATCH 03/32] Finder: Golden Gate sidebar
+Subject: [PATCH 03/33] Finder: Golden Gate sidebar
 
 Favorites (Recents, home folders) and Locations (devices, network, trash)
 sections from KFilePlacesModel, accent-tinted symbolic icons (gray when the
