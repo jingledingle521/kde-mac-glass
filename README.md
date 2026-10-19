@@ -14,7 +14,7 @@ and Mac-style widgets for the menu bar.
 | `wallpapers/GoldenGate` | Golden Gate wallpaper |
 | `fonts/` | Inter (UI font) |
 | `extras/dock-helper` | Window helper for the dock and notifications (QML module `org.brhett.macdock`): KWin blur behind the glass, clicks pass through the rest. Built by `install.sh` (needs build tools, listed in its `install.sh`) |
-| `extras/menu-style` | Optional **MacGlass widget style**: Breeze with every app's menus drawn like macOS (frosted rounded panel, blue hover, ⌃⇧⌘ shortcuts). `./install.sh --menus`; `extras/menu-style/install.sh --off` goes back to Breeze |
+| `extras/menu-style` | Optional **MacGlass widget style**: Breeze with every app's menus drawn like macOS (frosted rounded panel, blue hover, ⌃⇧⌘ shortcuts), and macOS-style buttons, checkboxes, pop-up buttons, sliders, segmented tabs and grouped panels (group boxes). `./install.sh --menus`; `extras/menu-style/install.sh --off` goes back to Breeze |
 | `extras/lockscreen` | Optional Golden Gate lock screen |
 | `extras/tray-patch` | Optional patched system tray: 16px icons, icon-grid overflow popup |
 | `extras/vivaldi-menu` | Optional File/Edit/View/History/Bookmarks/Window/Help for Vivaldi in KDE's global menu (`install.sh`, load the extension once; Vivaldi runs natively on Wayland, `install.sh --x11` for the stock Global Menu widget) |

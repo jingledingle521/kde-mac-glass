@@ -10,7 +10,9 @@
 // combo boxes) and sliders are drawn like macOS's: soft rounded fills, the
 // accent blue for checked and default, a pop-up button's blue chevron box,
 // a slider's thin track and white knob; tab bars along the top are a
-// segmented control over a rounded panel. Everything else is Breeze. QML apps
+// segmented control over a rounded panel; group boxes are macOS's grouped
+// panels with a small bold title above, at the left. Everything else is
+// Breeze. QML apps
 // using the desktop Qt Quick Controls style get the same, since that style
 // paints through the widget style.
 //
@@ -33,6 +35,7 @@
 #include <QStyleOptionMenuItem>
 #include <QStyleOptionButton>
 #include <QStyleOptionComboBox>
+#include <QStyleOptionGroupBox>
 #include <QStyleOptionSlider>
 #include <QStyleOptionTab>
 #include <QStyleOptionTabWidgetFrame>
@@ -59,6 +62,10 @@ constexpr int ShadowOffset = 5; // the shadow falls a little lower
 const QColor Highlight(49, 91, 239); // the Apple menu's hover blue
 const QColor Accent = Highlight; // checked boxes, default buttons, sliders
 constexpr qreal ControlRadius = 5;
+constexpr int GroupRadius = 10;
+constexpr int GroupTitleGap = 6; // between a group's title and its panel
+constexpr int GroupPadding = 6; // inside the panel, over its layout's margins
+constexpr int GroupTitleSpace = 8; // above a group's title, apart from the group before
 
 bool isDark(const QPalette &palette)
 {
@@ -490,8 +497,27 @@ public:
         painter->restore();
     }
 
+    QRect subControlRect(ComplexControl control, const QStyleOptionComplex *option, SubControl subControl, const QWidget *widget) const override
+    {
+        if (control == CC_GroupBox) {
+            if (const auto *box = qstyleoption_cast<const QStyleOptionGroupBox *>(option)) {
+                return groupBoxRect(box, subControl, widget);
+            }
+        }
+        return QProxyStyle::subControlRect(control, option, subControl, widget);
+    }
+
     void drawComplexControl(ComplexControl control, const QStyleOptionComplex *option, QPainter *painter, const QWidget *widget) const override
     {
+        if (control == CC_GroupBox) {
+            if (const auto *box = qstyleoption_cast<const QStyleOptionGroupBox *>(option)) {
+                painter->save();
+                painter->setRenderHint(QPainter::Antialiasing);
+                drawGroupBox(box, painter, widget);
+                painter->restore();
+                return;
+            }
+        }
         if (control == CC_ComboBox) {
             const auto *combo = qstyleoption_cast<const QStyleOptionComboBox *>(option);
             if (combo && !combo->editable && combo->frame) {
@@ -516,6 +542,65 @@ public:
 
 private:
     // ---- controls -------------------------------------------------------------
+
+    static QFont groupTitleFont(const QWidget *widget)
+    {
+        QFont font = widget ? widget->font() : QApplication::font();
+        font.setBold(true);
+        return font;
+    }
+
+    // A group box: its title (and checkbox) on a line above the panel, the
+    // contents inside the panel. Untitled boxes are just the panel.
+    QRect groupBoxRect(const QStyleOptionGroupBox *box, SubControl subControl, const QWidget *widget) const
+    {
+        const QRect rect = box->rect;
+        const bool checkable = box->subControls & SC_GroupBoxCheckBox;
+        const QFontMetrics fm(groupTitleFont(widget));
+        const int checkSize = checkable ? pixelMetric(PM_IndicatorWidth, box, widget) : 0;
+        const int titleHeight = (box->text.isEmpty() && !checkable) ? 0 : qMax(fm.height(), checkSize);
+        const int top = rect.top() + (titleHeight ? GroupTitleSpace : 0);
+        const QRect frame = rect.adjusted(0, titleHeight ? GroupTitleSpace + titleHeight + GroupTitleGap : 0, 0, 0);
+        switch (subControl) {
+        case SC_GroupBoxCheckBox:
+            return QRect(rect.left() + 6, top + (titleHeight - checkSize) / 2, checkSize, checkSize);
+        case SC_GroupBoxLabel: {
+            const int x = rect.left() + 6 + (checkable ? checkSize + 6 : 0);
+            return QRect(x, top, qMin(fm.horizontalAdvance(box->text) + 2, rect.right() - x), titleHeight);
+        }
+        case SC_GroupBoxFrame:
+            return frame;
+        case SC_GroupBoxContents:
+            return frame.adjusted(GroupPadding, GroupPadding, -GroupPadding, -GroupPadding);
+        default:
+            return QProxyStyle::subControlRect(CC_GroupBox, box, subControl, widget);
+        }
+    }
+
+    void drawGroupBox(const QStyleOptionGroupBox *box, QPainter *painter, const QWidget *widget) const
+    {
+        const bool dark = isDark(box->palette);
+        const QRectF frame = QRectF(groupBoxRect(box, SC_GroupBoxFrame, widget)).adjusted(0.5, 0.5, -0.5, -0.5);
+        painter->setPen(QPen(dark ? QColor(255, 255, 255, 20) : QColor(0, 0, 0, 20), 1));
+        painter->setBrush(dark ? QColor(255, 255, 255, 13) : QColor(0, 0, 0, 10));
+        painter->drawPath(roundedRect(frame, GroupRadius));
+
+        if (box->subControls & SC_GroupBoxCheckBox) {
+            QStyleOptionButton check;
+            check.QStyleOption::operator=(*box);
+            check.rect = groupBoxRect(box, SC_GroupBoxCheckBox, widget);
+            proxy()->drawPrimitive(PE_IndicatorCheckBox, &check, painter, widget);
+        }
+        if (!box->text.isEmpty()) {
+            QColor color = textColor(box->palette);
+            if (!(box->state & State_Enabled)) {
+                color.setAlphaF(0.4);
+            }
+            painter->setPen(color);
+            painter->setFont(groupTitleFont(widget));
+            painter->drawText(groupBoxRect(box, SC_GroupBoxLabel, widget), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextShowMnemonic, box->text);
+        }
+    }
 
     // A button's fill: soft and translucent on dark, white on light; the
     // accent for a default button.

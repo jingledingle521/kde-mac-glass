@@ -1,0 +1,699 @@
+From bd64292625c58cb558c2b37666efda72cef5a8d9 Mon Sep 17 00:00:00 2001
+From: jingledingle521 <36874370+jingledingle521@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 18:13:34 -0500
+Subject: [PATCH 11/11] =?UTF-8?q?Pages=20titled=20as=20listed,=20macOS=20f?=
+ =?UTF-8?q?orms=20on=20widget=20pages,=20Wi=E2=80=91Fi=20Details=20sheet?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Pages take the names they have in the sidebar and lists (Login Items,
+  Passwords, Language & Region…) instead of KDE's.
+- Widget pages' forms: labels at the left, and a rounded panel behind
+  forms not already in a group box or framed tab. QML forms built after
+  the page opens are decorated too.
+- Wi‑Fi's Details… opens a macOS-style sheet with the network's details
+  (Plasma's network module), Forget This Network… and Advanced….
+- MAC_TEST_TOUR=<dir> (and MAC_TEST_TOUR_ONLY) saves a picture of every
+  page, for checking the app's look.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ app/CMakeLists.txt         |   1 +
+ app/ModuleView.cpp         | 113 +++++++++++++++++-
+ app/ModuleView.h           |   5 +
+ app/SidebarMode.cpp        |  30 +++++
+ app/SidebarMode.h          |   8 ++
+ app/main.cpp               |   3 +-
+ app/qml/MacWifiDetails.qml | 239 +++++++++++++++++++++++++++++++++++++
+ app/qml/MacWifiPage.qml    |  17 ++-
+ app/qml/Main.qml           |  53 ++++++++
+ 9 files changed, 464 insertions(+), 5 deletions(-)
+ create mode 100644 app/qml/MacWifiDetails.qml
+
+diff --git a/app/CMakeLists.txt b/app/CMakeLists.txt
+index b96a4e38..f2336b14 100644
+--- a/app/CMakeLists.txt
++++ b/app/CMakeLists.txt
+@@ -38,6 +38,7 @@ ecm_target_qml_sources(systemsettings SOURCES
+     qml/MacGroupRow.qml
+     qml/MacSwitch.qml
+     qml/MacWifiPage.qml
++    qml/MacWifiDetails.qml
+     qml/MacFormPanels.qml
+     qml/MacTile.qml
+     qml/Main.qml
+diff --git a/app/ModuleView.cpp b/app/ModuleView.cpp
+index 9c419198..8d6cdcbd 100644
+--- a/app/ModuleView.cpp
++++ b/app/ModuleView.cpp
+@@ -23,6 +23,9 @@
+ #include <functional>
+ #include <QTimer>
+ #include <QDebug>
++#include <QFormLayout>
++#include <QGroupBox>
++#include <QTabWidget>
+ #include <QMouseEvent>
+ #include <QWindow>
+ #include <QQuickItem>
+@@ -125,6 +128,35 @@ void CustomTitle::paintEvent(QPaintEvent *event)
+     KTitleWidget::paintEvent(event);
+ }
+ 
++// MacSettings: draws macOS's rounded panel behind the forms (QFormLayout)
++// of a widget page that aren't already in a group box or a tab, on the
++// widget that holds them.
++class FormPanelPainter : public QObject
++{
++public:
++    using QObject::QObject;
++    QList<QPointer<QFormLayout>> forms;
++
++protected:
++    bool eventFilter(QObject *watched, QEvent *event) override
++    {
++        if (event->type() == QEvent::Paint) {
++            auto *widget = static_cast<QWidget *>(watched);
++            QPainter painter(widget);
++            painter.setRenderHint(QPainter::Antialiasing);
++            const bool dark = widget->palette().color(QPalette::Window).lightnessF() < 0.5;
++            painter.setPen(QPen(dark ? QColor(255, 255, 255, 20) : QColor(0, 0, 0, 20), 1));
++            painter.setBrush(dark ? QColor(255, 255, 255, 13) : QColor(0, 0, 0, 10));
++            for (const QPointer<QFormLayout> &form : std::as_const(forms)) {
++                if (form && form->rowCount() > 0 && !form->geometry().isEmpty()) {
++                    painter.drawRoundedRect(QRectF(form->geometry()).adjusted(0.5, 0.5, -0.5, -0.5), 10, 10);
++                }
++            }
++        }
++        return false;
++    }
++};
++
+ class ModuleView::Private
+ {
+ public:
+@@ -141,6 +173,9 @@ public:
+     // MacSettings: back to the list of pages.
+     QToolButton *mBack = nullptr;
+     bool backVisible = false;
++    QHash<QString, QString> pageTitles;
++    // Forms a QML page builds later (another tab, settings loaded late).
++    QTimer *formWatch = nullptr;
+     // MacSettings: macOS's grouped forms for the pages' FormLayouts.
+     std::unique_ptr<QQmlComponent> formPanels;
+     // The ‹ inside each QML page's header.
+@@ -179,6 +214,16 @@ ModuleView::ModuleView(const std::shared_ptr<QQmlEngine> &engine, QWidget *paren
+     // over the start of the page's header (setBackVisible).
+     rootLayout->setContentsMargins(0, TopGap, 0, 0);
+     rootLayout->addWidget(d->mCustomHeader);
++    d->formWatch = new QTimer(this);
++    d->formWatch->setInterval(1000);
++    connect(d->formWatch, &QTimer::timeout, this, [this] {
++        KCModule *kcm = d->mPages.value(d->mPageWidget->currentPage());
++        auto quick = kcm && kcm->inherits("KCModuleQml") && isVisible() ? kcm->widget()->findChild<QQuickWidget *>() : nullptr;
++        if (auto root = quick ? qobject_cast<QQuickItem *>(quick->rootObject()) : nullptr) {
++            decorateForms(root);
++        }
++    });
++    d->formWatch->start();
+     d->mBack = new QToolButton(this);
+     d->mBack->setIcon(QIcon::fromTheme(QStringLiteral("go-previous")));
+     d->mBack->setAutoRaise(true);
+@@ -367,7 +412,7 @@ void ModuleView::updatePageIconHeader(KPageWidgetItem *page)
+         return;
+     }
+ 
+-    const QString &moduleName = kcm->metaData().name();
++    const QString moduleName = d->pageTitles.value(kcm->metaData().pluginId(), kcm->metaData().name());
+     page->setHeader(moduleName);
+     page->setIcon(QIcon::fromTheme(kcm->metaData().iconName()));
+ 
+@@ -542,6 +587,10 @@ void ModuleView::activeModuleChanged(KPageWidgetItem *current, KPageWidgetItem *
+     }
+ 
+     updatePageIconHeader(current);
++    // MacSettings: and its forms, if it's made of widgets.
++    if (KCModule *kcm = d->mPages.value(current); kcm && !kcm->inherits("KCModuleQml")) {
++        decorateWidgetForms(kcm->widget());
++    }
+     updateScrollAreaFocusPolicy();
+     moduleShowDefaultsIndicators(d->mDefaultsIndicatorsVisible);
+ }
+@@ -744,6 +793,11 @@ bool ModuleView::eventFilter(QObject *watched, QEvent *event)
+     return QWidget::eventFilter(watched, event);
+ }
+ 
++void ModuleView::setPageTitles(const QHash<QString, QString> &titles)
++{
++    d->pageTitles = titles;
++}
++
+ void ModuleView::setBackVisible(bool visible)
+ {
+     d->backVisible = visible;
+@@ -818,6 +872,14 @@ void ModuleView::updateBackButton()
+                 // And a bold title: the header's Kirigami.Heading showing the
+                 // current page's title (headers live in the visual tree).
+                 QObject *currentPage = pageStack ? pageStack->property("currentItem").value<QObject *>() : nullptr;
++                // The page's first page takes the name it has in the sidebar
++                // or list (its sub-pages keep theirs).
++                if (currentPage && pageStack->property("depth").toInt() == 1) {
++                    const QString name = d->pageTitles.value(current ? current->metaData().pluginId() : QString());
++                    if (!name.isEmpty() && currentPage->property("title").toString() != name) {
++                        currentPage->setProperty("title", name);
++                    }
++                }
+                 const QString title = currentPage ? currentPage->property("title").toString() : QString();
+                 std::function<void(QQuickItem *)> embolden = [&](QQuickItem *item) {
+                     for (QQuickItem *child : item->childItems()) {
+@@ -860,6 +922,55 @@ void ModuleView::scheduleBackButtonUpdate()
+     QTimer::singleShot(300, this, &ModuleView::updateBackButton);
+ }
+ 
++void ModuleView::decorateWidgetForms(QWidget *page)
++{
++    if (!page || page->property("_macForms").toBool()) {
++        return;
++    }
++    page->setProperty("_macForms", true);
++    for (QFormLayout *form : page->findChildren<QFormLayout *>()) {
++        // Labels at the left, as in the QML pages' panels.
++        form->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
++        form->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
++        QWidget *holder = form->parentWidget();
++        if (!holder) {
++            continue;
++        }
++        // A form within another form, a group box or a framed tab is
++        // already on a panel.
++        bool onPanel = false;
++        for (QWidget *w = holder; w && w != page->parentWidget(); w = w->parentWidget()) {
++            const auto *tabs = qobject_cast<QTabWidget *>(w);
++            if (qobject_cast<QGroupBox *>(w) || (tabs && !tabs->documentMode())) {
++                onPanel = true;
++                break;
++            }
++        }
++        for (QObject *o = form->parent(); o && !onPanel; o = o->parent()) {
++            if (qobject_cast<QFormLayout *>(o)) {
++                onPanel = true;
++            }
++            if (o == holder) {
++                break;
++            }
++        }
++        if (onPanel) {
++            continue;
++        }
++        auto *painter = dynamic_cast<FormPanelPainter *>(holder->property("_macFormPanels").value<QObject *>());
++        if (!painter) {
++            painter = new FormPanelPainter(holder);
++            holder->installEventFilter(painter);
++            holder->setProperty("_macFormPanels", QVariant::fromValue<QObject *>(painter));
++        }
++        painter->forms.append(form);
++        const int pad = 12;
++        const QMargins m = form->contentsMargins();
++        form->setContentsMargins(qMax(m.left(), pad), qMax(m.top(), pad - 2), qMax(m.right(), pad), qMax(m.bottom(), pad - 2));
++        holder->update();
++    }
++}
++
+ void ModuleView::decorateForms(QQuickItem *item)
+ {
+     for (QQuickItem *child : item->childItems()) {
+diff --git a/app/ModuleView.h b/app/ModuleView.h
+index 4c3058e5..4691f9cd 100644
+--- a/app/ModuleView.h
++++ b/app/ModuleView.h
+@@ -136,6 +136,9 @@ public:
+     /** MacSettings: shows the ‹ button that goes back to the list of pages
+      *  this one was opened from. */
+     void setBackVisible(bool visible);
++    /** MacSettings: the names pages go by in the sidebar and lists, by
++     *  plugin id, shown as their titles in place of KDE's. */
++    void setPageTitles(const QHash<QString, QString> &titles);
+     /** MacSettings: the ‹ inside a QML page's header was clicked. */
+     Q_INVOKABLE void requestBack();
+ 
+@@ -223,6 +226,8 @@ Q_SIGNALS:
+ private:
+     void updateBackButton();
+     void decorateForms(QQuickItem *item);
++    // MacSettings: macOS's form look for a widget page's QFormLayouts.
++    void decorateWidgetForms(QWidget *page);
+     class Private;
+     Private *const d;
+ };
+diff --git a/app/SidebarMode.cpp b/app/SidebarMode.cpp
+index 3b06eac6..2d5fd292 100644
+--- a/app/SidebarMode.cpp
++++ b/app/SidebarMode.cpp
+@@ -7,6 +7,8 @@
+ 
+ #include "SidebarMode.h"
+ 
++#include <QApplication>
++
+ #include "MenuItem.h"
+ #include "MenuModel.h"
+ #include "MenuProxyModel.h"
+@@ -966,6 +968,34 @@ QString SidebarMode::testEntry() const
+     return qEnvironmentVariable("MAC_TEST_ENTRY");
+ }
+ 
++void SidebarMode::setPageTitles(const QVariantMap &titles)
++{
++    QHash<QString, QString> names;
++    for (auto it = titles.begin(); it != titles.end(); ++it) {
++        names.insert(it.key(), it.value().toString());
++    }
++    d->moduleView->setPageTitles(names);
++}
++
++QString SidebarMode::testTour() const
++{
++    return qEnvironmentVariable("MAC_TEST_TOUR");
++}
++
++QStringList SidebarMode::testTourOnly() const
++{
++    return qEnvironmentVariable("MAC_TEST_TOUR_ONLY").split(QLatin1Char(','), Qt::SkipEmptyParts);
++}
++
++void SidebarMode::testShot(const QString &name)
++{
++    if (name.isEmpty()) {
++        qApp->quit();
++        return;
++    }
++    d->mainWidget->window()->grab().save(testTour() + QLatin1Char('/') + name + QStringLiteral(".png"));
++}
++
+ // MacSettings: window controls --------------------------------------------
+ 
+ QWidget *SidebarMode::sidebarWidget() const
+diff --git a/app/SidebarMode.h b/app/SidebarMode.h
+index 5da7ca76..06e83098 100644
+--- a/app/SidebarMode.h
++++ b/app/SidebarMode.h
+@@ -174,6 +174,14 @@ public:
+     /** For checking without clicking: the sidebar entry to open at startup
+      *  (MAC_TEST_ENTRY, e.g. "wifi"), or empty. */
+     Q_INVOKABLE QString testEntry() const;
++    /** The names pages go by here (plugin id → name), for their titles. */
++    Q_INVOKABLE void setPageTitles(const QVariantMap &titles);
++    /** MAC_TEST_TOUR=<dir>: the sidebar visits every page and saves a
++     *  picture of the window for each (testShot), then quits. */
++    Q_INVOKABLE QString testTour() const;
++    /** MAC_TEST_TOUR_ONLY=<pictures,…>: just these (as named by the tour). */
++    Q_INVOKABLE QStringList testTourOnly() const;
++    Q_INVOKABLE void testShot(const QString &name);
+ 
+     // MacSettings: window controls.
+     QWidget *sidebarWidget() const;
+diff --git a/app/main.cpp b/app/main.cpp
+index 48a13ec3..19ffbc90 100644
+--- a/app/main.cpp
++++ b/app/main.cpp
+@@ -153,7 +153,8 @@ int main(int argc, char *argv[])
+         return -1;
+     }
+ 
+-    KDBusService service(KDBusService::Unique);
++    // MacSettings: a picture tour runs beside the open window.
++    KDBusService service(qEnvironmentVariableIsSet("MAC_TEST_TOUR") ? KDBusService::Multiple : KDBusService::Unique);
+ 
+     KCrash::initialize();
+ 
+diff --git a/app/qml/MacWifiDetails.qml b/app/qml/MacWifiDetails.qml
+new file mode 100644
+index 00000000..f132850e
+--- /dev/null
++++ b/app/qml/MacWifiDetails.qml
+@@ -0,0 +1,239 @@
++// SPDX-FileCopyrightText: 2026 Brhett
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++pragma ComponentBehavior: Bound
++
++import QtQuick
++import QtQuick.Controls as QQC2
++import QtQuick.Layouts
++import org.kde.kirigami as Kirigami
++
++// MacSettings: macOS's Wi‑Fi Details sheet for the network you're on: its
++// name and state, then its details in rounded groups (from Plasma's network
++// module: the network, IPv4, IPv6), with Forget This Network… and Done.
++// Advanced… opens KDE's full network page.
++QQC2.Popup {
++    id: sheet
++
++    // The network (as MacWifiPage lists it) and its details model.
++    property var network: null
++    // Called to forget it (the page knows how).
++    signal forgetRequested(var network)
++
++    property var sections: []
++    // macOS's names for a few of the details.
++    readonly property var macNames: ({
++        "Default Gateway": i18n("Router"),
++        "Primary Nameserver": i18n("DNS Server"),
++        "Secondary Nameserver": i18n("Second DNS Server"),
++        "Access Point (SSID)": i18n("Network Name"),
++        "MAC Address": i18n("Wi‑Fi Address")
++    })
++
++    // The model's rows (section titles, then label/value pairs) as groups.
++    // Roles: Qt.UserRole + 1…4 = is section, section title, label, value.
++    function read() {
++        const model = network ? network.details : null;
++        const result = [];
++        if (model) {
++            for (let i = 0; i < model.rowCount(); ++i) {
++                const index = model.index(i, 0);
++                if (model.data(index, Qt.UserRole + 1)) {
++                    result.push({ title: model.data(index, Qt.UserRole + 2), rows: [] });
++                } else if (result.length > 0) {
++                    let label = model.data(index, Qt.UserRole + 3) || "";
++                    // "IPv4 Address" under IPv4 reads as "Address".
++                    const title = result[result.length - 1].title;
++                    if (label.startsWith(title + " ")) {
++                        label = label.substring(title.length + 1);
++                        label = label.charAt(0).toUpperCase() + label.substring(1);
++                    }
++                    label = macNames[label] || label;
++                    result[result.length - 1].rows.push({ label: label, value: model.data(index, Qt.UserRole + 4) || "" });
++                }
++            }
++        }
++        sections = result.filter(s => s.rows.length > 0);
++    }
++
++    function show(n) {
++        network = n;
++        read();
++        open();
++    }
++
++    parent: QQC2.Overlay.overlay
++    anchors.centerIn: parent
++    width: Math.min(parent ? parent.width - Kirigami.Units.gridUnit * 2 : 0, Kirigami.Units.gridUnit * 28)
++    height: Math.min(parent ? parent.height - Kirigami.Units.gridUnit * 3 : 0, column.implicitHeight + topPadding + bottomPadding)
++    modal: true
++    dim: true
++    padding: Kirigami.Units.gridUnit
++    closePolicy: QQC2.Popup.CloseOnEscape | QQC2.Popup.CloseOnPressOutside
++
++    Connections {
++        target: sheet.network ? sheet.network.details : null
++        function onModelReset() { sheet.read(); }
++        function onDataChanged() { sheet.read(); }
++        function onRowsInserted() { sheet.read(); }
++        function onRowsRemoved() { sheet.read(); }
++    }
++
++    QQC2.Overlay.modal: Rectangle {
++        color: Qt.rgba(0, 0, 0, 0.35)
++    }
++
++    enter: Transition {
++        NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 150 }
++        NumberAnimation { property: "scale"; from: 0.96; to: 1; duration: 180; easing.type: Easing.OutCubic }
++    }
++    exit: Transition {
++        NumberAnimation { property: "opacity"; to: 0; duration: 120 }
++    }
++
++    background: Rectangle {
++        radius: 12
++        color: Kirigami.Theme.backgroundColor
++        border.width: 1
++        border.color: Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g, Kirigami.Theme.textColor.b, 0.12)
++    }
++
++    contentItem: ColumnLayout {
++        id: column
++        spacing: Kirigami.Units.gridUnit
++
++        // The network: its tile, name and state.
++        RowLayout {
++            spacing: Kirigami.Units.largeSpacing
++            MacTile {
++                glyph: "network-wireless-symbolic"
++                tint: "#0a84ff"
++                size: 36
++            }
++            ColumnLayout {
++                Layout.fillWidth: true
++                spacing: 2
++                QQC2.Label {
++                    Layout.fillWidth: true
++                    text: sheet.network ? sheet.network.name : ""
++                    font.weight: Font.Bold
++                    elide: Text.ElideRight
++                }
++                RowLayout {
++                    spacing: 5
++                    Rectangle {
++                        width: 7
++                        height: 7
++                        radius: 3.5
++                        color: "#30d158"
++                    }
++                    QQC2.Label {
++                        text: i18n("Connected")
++                        font: Kirigami.Theme.smallFont
++                        opacity: 0.6
++                    }
++                }
++            }
++            QQC2.Button {
++                text: i18n("Forget This Network…")
++                visible: sheet.network !== null && sheet.network.uuid !== ""
++                onClicked: forgetConfirm.open()
++            }
++        }
++
++        // The details, scrolling when they don't fit.
++        QQC2.ScrollView {
++            id: scroll
++            Layout.fillWidth: true
++            Layout.fillHeight: true
++            implicitHeight: details.implicitHeight
++            QQC2.ScrollBar.horizontal.policy: QQC2.ScrollBar.AlwaysOff
++            contentWidth: availableWidth
++
++            ColumnLayout {
++                id: details
++                // Clear of the scroll bar when it shows.
++                width: scroll.availableWidth - (scroll.QQC2.ScrollBar.vertical.visible ? scroll.QQC2.ScrollBar.vertical.width + Kirigami.Units.smallSpacing : 0)
++                spacing: Kirigami.Units.gridUnit
++
++                Repeater {
++                    model: sheet.sections
++                    delegate: ColumnLayout {
++                        id: section
++                        required property var modelData
++                        Layout.fillWidth: true
++                        spacing: Kirigami.Units.smallSpacing
++
++                        QQC2.Label {
++                            Layout.leftMargin: Kirigami.Units.smallSpacing
++                            text: section.modelData.title
++                            font.weight: Font.Bold
++                        }
++                        MacGroup {
++                            Repeater {
++                                model: section.modelData.rows
++                                delegate: MacGroupRow {
++                                    id: detailRow
++                                    required property var modelData
++                                    required property int index
++                                    first: index === 0
++                                    implicitHeight: Kirigami.Units.gridUnit * 1.9
++                                    QQC2.Label {
++                                        text: detailRow.modelData.label
++                                    }
++                                    Item {
++                                        Layout.fillWidth: true
++                                    }
++                                    QQC2.Label {
++                                        Layout.maximumWidth: details.width * 0.6
++                                        text: detailRow.modelData.value
++                                        opacity: 0.6
++                                        elide: Text.ElideMiddle
++                                        horizontalAlignment: Text.AlignRight
++                                    }
++                                }
++                            }
++                        }
++                    }
++                }
++            }
++        }
++
++        RowLayout {
++            Layout.fillWidth: true
++            QQC2.Button {
++                text: i18n("Advanced…")
++                onClicked: {
++                    sheet.close();
++                    systemsettings.openFromLanding("kcm_networkmanagement");
++                }
++            }
++            Item {
++                Layout.fillWidth: true
++            }
++            QQC2.Button {
++                text: i18n("Done")
++                highlighted: true
++                onClicked: sheet.close()
++            }
++        }
++    }
++
++    Kirigami.PromptDialog {
++        id: forgetConfirm
++        parent: QQC2.Overlay.overlay
++        title: i18n("Forget “%1”?", sheet.network ? sheet.network.name : "")
++        subtitle: i18n("This computer will no longer join this Wi‑Fi network automatically.")
++        standardButtons: QQC2.Dialog.Cancel
++        customFooterActions: [
++            Kirigami.Action {
++                text: i18n("Forget")
++                onTriggered: {
++                    forgetConfirm.close();
++                    sheet.forgetRequested(sheet.network);
++                    sheet.close();
++                }
++            }
++        ]
++    }
++}
+diff --git a/app/qml/MacWifiPage.qml b/app/qml/MacWifiPage.qml
+index 98bd5576..b3bbe26e 100644
+--- a/app/qml/MacWifiPage.qml
++++ b/app/qml/MacWifiPage.qml
+@@ -10,7 +10,7 @@ import org.kde.kirigami as Kirigami
+ import org.kde.plasma.networkmanagement as PlasmaNM
+ 
+ // MacSettings: macOS's Wi‑Fi page: Wi‑Fi on or off, the network you're on
+-// (Details… opens KDE's full network page), your known networks, and the
++// (Details… opens its details sheet, MacWifiDetails), your known networks, and the
+ // other networks around, each with Connect. Uses Plasma's network module,
+ // like the Network widget; passwords for new networks are asked for by
+ // Plasma's network agent.
+@@ -48,7 +48,8 @@ ColumnLayout {
+                 uuid: r.model.Uuid || "",
+                 connectionPath: r.model.ConnectionPath,
+                 devicePath: r.model.DevicePath,
+-                specificPath: r.model.SpecificPath
++                specificPath: r.model.SpecificPath,
++                details: r.model.ConnectionDetailsModel
+             };
+             if (n.state === PlasmaNM.Enums.Activated || n.state === PlasmaNM.Enums.Activating) {
+                 cur.push(n);
+@@ -64,7 +65,13 @@ ColumnLayout {
+         current = cur;
+         known = kn;
+         others = ot;
++        // MAC_TEST_TOUR_ONLY=wifi,wifi-details: the tour's picture of Details.
++        if (cur.length > 0 && !detailsTested && systemsettings.testTourOnly().indexOf("wifi-details") >= 0) {
++            detailsTested = true;
++            detailsSheet.show(cur[0]);
++        }
+     }
++    property bool detailsTested: false
+ 
+     function connect(n) {
+         if (n.uuid !== "") {
+@@ -77,6 +84,10 @@ ColumnLayout {
+     PlasmaNM.Handler {
+         id: handler
+     }
++    MacWifiDetails {
++        id: detailsSheet
++        onForgetRequested: network => handler.removeConnection(network.connectionPath)
++    }
+     PlasmaNM.EnabledConnections {
+         id: enabledConnections
+     }
+@@ -189,7 +200,7 @@ ColumnLayout {
+                 }
+                 QQC2.Button {
+                     text: i18n("Details…")
+-                    onClicked: systemsettings.openFromLanding("kcm_networkmanagement")
++                    onClicked: detailsSheet.show(currentRow.modelData)
+                 }
+             }
+         }
+diff --git a/app/qml/Main.qml b/app/qml/Main.qml
+index e759189d..97ad5d45 100644
+--- a/app/qml/Main.qml
++++ b/app/qml/Main.qml
+@@ -93,6 +93,59 @@ Item {
+         }
+     }
+ 
++    // Pages are titled by the names they have here: an entry's name for its
++    // one page, the list names (Entries.pageNames) for the rest.
++    Component.onCompleted: {
++        const titles = Object.assign({}, Entries.pageNames);
++        for (const e of entries) {
++            if (e.modules.length === 1 && !e.page) {
++                titles[e.modules[0]] = e.name;
++            }
++        }
++        systemsettings.setPageTitles(titles);
++    }
++
++    // MAC_TEST_TOUR: every entry, and every page of its list, one picture each.
++    Timer {
++        id: tour
++        property var steps: []
++        interval: 2500
++        repeat: true
++        running: systemsettings.testTour() !== ""
++        onTriggered: {
++            if (steps.length === 0 && !done) {
++                for (const e of root.entries) {
++                    steps.push({ shot: e.key, run: () => root.open(e) });
++                    if (e.modules.length > 1 || e.page) {
++                        for (const m of e.modules) {
++                            steps.push({ shot: e.key + "--" + m, run: () => { root.open(e); systemsettings.openFromLanding(m); } });
++                        }
++                    }
++                }
++                const only = systemsettings.testTourOnly();
++                if (only.length > 0) {
++                    steps = steps.filter(step => only.indexOf(step.shot) >= 0);
++                }
++                done = true;
++            }
++            if (pending !== "") {
++                systemsettings.testShot(pending);
++                pending = "";
++                return;
++            }
++            const step = steps.shift();
++            console.warn("tour:", step ? step.shot : "end");
++            if (!step) {
++                systemsettings.testShot("");
++                return;
++            }
++            step.run();
++            pending = step.shot;
++        }
++        property bool done: false
++        property string pending: ""
++    }
++
+     // Start on General, as macOS does, unless a page was asked for.
+     Timer {
+         running: true
+-- 
+2.56.0
+
