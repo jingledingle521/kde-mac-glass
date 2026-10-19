@@ -1,0 +1,152 @@
+From 67ce12481e57538ca996f02ad708243eacfb2517 Mon Sep 17 00:00:00 2001
+From: jingledingle521 <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 20:52:27 -0500
+Subject: [PATCH 4/4] =?UTF-8?q?Mac=20Settings:=20fix=20crash=20on=20?=
+ =?UTF-8?q?=E2=80=B9;=20README?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Going back closed the page and the ‹ inside it while the button was still
+handling its click, and Qt aborted. It now goes back on the next pass of
+the event loop. MAC_TEST_BACK_CLICK=1 (with MAC_TEST_BACK) clicks it too.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ README.md                 | 70 +++++++++++++++++++++++++++++++++++++++
+ app/ModuleView.cpp        |  4 ++-
+ app/SidebarMode.cpp       | 12 +++++++
+ app/qml/MacBackButton.qml |  1 +
+ 4 files changed, 86 insertions(+), 1 deletion(-)
+ create mode 100644 README.md
+
+diff --git a/README.md b/README.md
+new file mode 100644
+index 00000000..1a4e50d0
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,70 @@
++# settings-kde
++
++**Mac Settings for KDE Plasma**: KDE's
++[System Settings](https://invent.kde.org/plasma/systemsettings) laid out
++and styled like macOS's System Settings (Sequoia and later).
++
++Based on System Settings 6.7.5. Every change is a commit on top of the
++`v6.7.5` tag, and the upstream code is marked `MacSettings:` where it was
++changed. All of KDE's settings pages (KCMs) are the stock ones, unchanged;
++only the app around them is different.
++
++## What's different from System Settings
++
++- **Window**: frameless, rounded, with stoplights (close, minimize, zoom)
++  in the corner, a native shadow, and a translucent glass sidebar that runs
++  to the top of the window. Drag empty space at the top to move;
++  double-click to zoom.
++- **Sidebar**: a search field, your account (name and picture; opens Users),
++  then macOS's groups with coloured tile icons: Wi‑Fi, Bluetooth, Network ·
++  Notifications, Sound · General, Appearance, Accessibility, Spotlight,
++  Privacy & Security · Desktop & Dock, Displays, Wallpaper, Battery ·
++  Lock Screen, Users & Groups, Passwords · Internet Accounts, Game
++  Controllers · Keyboard, Mouse, Trackpad, Printers & Scanners · and the
++  rest (tablets, touchscreens, disks, discs). Each entry maps to KDE's pages
++  (`app/qml/Entries.js`); entries whose pages aren't installed or don't
++  apply here are left out.
++- **Lists of pages**: entries covering several of KDE's pages (General,
++  Appearance, Desktop & Dock…) open a macOS-style list of them in rounded
++  groups; open one and ‹ takes you back.
++- **Pages**: headers blend into the page with a bold title. Forms are
++  macOS's grouped panels: Kirigami's new forms in their "cards" style, and
++  classic Kirigami form layouts decorated with a rounded panel behind each
++  section, left-aligned labels and section titles. No Help button (F1
++  still works) and no icons on the buttons.
++
++The macOS controls (buttons, checkboxes, pop-up buttons, sliders, segmented
++tabs) come from the MacGlass widget style in
++[kde-mac-glass](https://github.com/jingledingle521/kde-mac-glass), which this
++is part of.
++
++## Install
++
++```sh
++sudo dnf builddep plasma-systemsettings      # first time (Fedora)
++cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
++      -DCMAKE_INSTALL_PREFIX=$HOME/.local/opt/settings -DBUILD_TESTING=OFF
++ninja -C build install
++```
++
++It installs next to the stock app. To have the desktop open it (the
++launcher, other apps' "Configure…" buttons), put a `systemsettings` ahead of
++`/usr/bin` in your `PATH`:
++
++```sh
++cat > ~/.local/bin/systemsettings <<'EOF'
++#!/bin/sh
++exec "$HOME/.local/opt/settings/bin/systemsettings" "$@"
++EOF
++chmod +x ~/.local/bin/systemsettings
++```
++
++Delete that file to go back to the stock app. kde-mac-glass's
++`./install.sh --settings` does all of this.
++
++## Upstream
++
++System Settings is © the KDE community, and this keeps its licenses
++(GPL-2.0-or-later and others; see [LICENSES](LICENSES)). The window frame is
++shared with [finder-kde](https://github.com/jingledingle521/finder-kde). Not
++affiliated with KDE or Apple.
+diff --git a/app/ModuleView.cpp b/app/ModuleView.cpp
+index 3217444d..9c419198 100644
+--- a/app/ModuleView.cpp
++++ b/app/ModuleView.cpp
+@@ -849,7 +849,9 @@ void ModuleView::updateBackButton()
+ 
+ void ModuleView::requestBack()
+ {
+-    Q_EMIT backRequested();
++    // Going back closes the page, and the button with it: not while the
++    // button is still handling its click (Qt aborts if it's deleted there).
++    QMetaObject::invokeMethod(this, &ModuleView::backRequested, Qt::QueuedConnection);
+ }
+ 
+ void ModuleView::scheduleBackButtonUpdate()
+diff --git a/app/SidebarMode.cpp b/app/SidebarMode.cpp
+index 78fe34b4..4aef9de3 100644
+--- a/app/SidebarMode.cpp
++++ b/app/SidebarMode.cpp
+@@ -696,6 +696,18 @@ void SidebarMode::initWidget()
+             openLanding({{QStringLiteral("key"), QStringLiteral("general")}, {QStringLiteral("name"), QStringLiteral("General")}});
+             QTimer::singleShot(800, this, [this] {
+                 openFromLanding(qEnvironmentVariable("MAC_TEST_BACK"));
++                // MAC_TEST_BACK_CLICK: then click the page's ‹ (its own signal).
++                if (qEnvironmentVariableIsSet("MAC_TEST_BACK_CLICK")) {
++                    QTimer::singleShot(2500, this, [this] {
++                        for (QQuickWidget *quick : d->moduleView->findChildren<QQuickWidget *>()) {
++                            if (QQuickItem *root = quick->rootObject()) {
++                                if (QObject *back = root->findChild<QObject *>(QStringLiteral("macBack"))) {
++                                    QMetaObject::invokeMethod(back, "clicked");
++                                }
++                            }
++                        }
++                    });
++                }
+             });
+         });
+     }
+diff --git a/app/qml/MacBackButton.qml b/app/qml/MacBackButton.qml
+index b02624fd..fefbd8a0 100644
+--- a/app/qml/MacBackButton.qml
++++ b/app/qml/MacBackButton.qml
+@@ -8,6 +8,7 @@ import QtQuick.Controls as QQC2
+ // (a widget laid over the page would be hidden under it). ModuleView makes
+ // room for it with the header's titleLeftPadding.
+ QQC2.ToolButton {
++    objectName: "macBack"
+     required property QtObject view
+     // Height of the page's header (Kirigami's global toolbar).
+     property real headerHeight: 46
+-- 
+2.56.0
+
