@@ -15,7 +15,7 @@ function add(panel, plugin, config) {
 // Menu bar
 var bar = new Panel;
 bar.location = "top";
-bar.height = 30;
+bar.height = 26;
 bar.hiding = "dodgewindows";
 bar.floating = false;
 bar.lengthMode = "fill";
