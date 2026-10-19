@@ -1,7 +1,7 @@
 From 7d6651c9596e056c747fa66f2e8c7e223dc513c2 Mon Sep 17 00:00:00 2001
 From: Brhett <36874370+jingledingle521@users.noreply.github.com>
 Date: Sun, 18 Oct 2026 12:20:40 -0500
-Subject: [PATCH 12/36] Finder list view: flat column header, small disclosure
+Subject: [PATCH 12/37] Finder list view: flat column header, small disclosure
  slot, side insets
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

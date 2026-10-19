@@ -1,7 +1,7 @@
 From 10f496db20d17c8ce18b6774d4aec733c24e307a Mon Sep 17 00:00:00 2001
 From: Brhett <36874370+jingledingle521@users.noreply.github.com>
 Date: Sun, 18 Oct 2026 11:19:22 -0500
-Subject: [PATCH 09/36] Finder selection: icon tile + blue name pill, blue rows
+Subject: [PATCH 09/37] Finder selection: icon tile + blue name pill, blue rows
  in list view, no focus box; footer hairline
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
