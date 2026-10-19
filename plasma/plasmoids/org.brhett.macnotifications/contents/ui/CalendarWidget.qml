@@ -58,9 +58,12 @@ GlassCard {
 
     onNowChanged: refreshEvents()
 
+    // Setting enabledPlugins is what loads a plugin (populateEnabledPluginsList
+    // only ticks it in the settings list). Which calendars it shows is
+    // Plasma's own setting (plasmashellrc [PIMEventsPlugin] calendars).
     PlasmaCalendar.EventPluginsManager {
         id: eventPlugins
-        Component.onCompleted: populateEnabledPluginsList(["pimevents"])
+        enabledPlugins: ["pimevents"]
     }
 
     PlasmaCalendar.Calendar {
@@ -72,6 +75,10 @@ GlassCard {
         Component.onCompleted: daysModel.setPluginsManager(eventPlugins)
     }
 
+    // Picks every calendar when none is picked yet.
+    Loader {
+        source: "CalendarSetup.qml"
+    }
     Connections {
         target: calendar.daysModel
         function onAgendaUpdated(date) {
@@ -92,7 +99,7 @@ GlassCard {
         id: today
         x: 16
         y: 14
-        width: 120
+        width: 140
         spacing: 0
 
         PlasmaComponents3.Label {

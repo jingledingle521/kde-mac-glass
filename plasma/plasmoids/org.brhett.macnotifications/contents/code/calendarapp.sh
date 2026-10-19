@@ -1,5 +1,6 @@
 #!/bin/sh
-# Opens the user's calendar app: the default handler for calendar files, or,
+# Opens the user's calendar app: KDE's default calendar app (System Settings
+# → Default Applications), else the default handler for calendar files or,
 # when that handler is a hidden helper (KOrganizer's "korganizer-view"), the
 # visible app it belongs to. Exits 1 when there is no calendar app.
 
@@ -13,6 +14,12 @@ find_entry() {
     unset IFS
     return 1
 }
+
+app=$(kreadconfig6 --file defaultcalendarrc --group General --key ApplicationId 2>/dev/null)
+if [ -n "$app" ] && find_entry "$app.desktop" >/dev/null; then
+    kstart --application "$app" >/dev/null 2>&1 || exec gtk-launch "$app"
+    exit 0
+fi
 
 entry=$(xdg-mime query default text/calendar)
 [ -n "$entry" ] || entry=$(xdg-mime query default x-scheme-handler/webcal)

@@ -65,9 +65,11 @@ when an app opens and shrink away when it quits. Maximized windows stop above it
 The menu bar's date and time is the Notifications widget: click it (or press
 **Meta+N**) and Notification Center slides in from the right, with each app's
 notifications stacked on glass cards, then a Calendar widget showing today's
-events from your calendar app (KOrganizer's calendars, through Plasma's
-calendar plugin). Click a stack to spread it out; ✕ dismisses a card or
-clears an app. Clicking the Calendar widget opens your default calendar app.
+events from your calendars (KOrganizer's, through Plasma's calendar plugin,
+which needs kdepim-addons; all calendars are shown unless you pick some in the
+Digital Clock's Calendar settings). Click a stack to spread it out; ✕ dismisses
+a card or clears an app. Clicking the Calendar widget opens your default
+calendar app (System Settings → Default Applications).
 New notifications slide in as glass banners at the top right. Middle-click the
 clock to toggle Do Not Disturb.
 
