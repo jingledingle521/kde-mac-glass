@@ -3,9 +3,11 @@
 Plasma draws tooltips (and the dock's name bubbles) in this frame, and KWin
 blurs behind it through the mask pieces. This keeps the base's hints and
 shadow (so margins and the drop shadow stay the same) and replaces the nine
-frame pieces and their masks with glass matching panel-background (see
-make_panel.py): the same white tint for the glass level, a dark hairline
-outline and a light inner rim, with rounded corners.
+frame pieces and their masks with glass in the style of panel-background (see
+make_panel.py): a dark hairline outline and a light inner rim, with rounded
+corners. Unlike the dock's white glass it is tinted dark, as macOS's
+dark-mode dock labels are: its text is light, and a light bubble over a white
+window lost its text.
 
     make_tooltip.py tooltip-base.svg tooltip.svgz LEVEL
 """
@@ -48,12 +50,12 @@ def rgba(a, c='#ffffff'):
     return f'fill="{c}" fill-opacity="{a}"'
 
 
-# Same glass as the dock: white tint for the level, dark outline, light rim.
-fill = round(0.05 + 0.30 * level, 3)
-# The bubble floats over anything, so it gets a touch more body than the dock.
-fill = round(min(0.45, fill + 0.06), 3)
+# Dark glass (the dock bubble's tail matches it: DockBubble.qml), a little
+# clearer at higher glass levels; dark outline, light rim.
+TINT = '#26262a'
+fill = round(0.78 - 0.15 * level, 3)
 outline = 0.22
-top, side, bottom = 0.30, 0.10, 0.10
+top, side, bottom = 0.16, 0.06, 0.05
 MX, MY = OX + 3 * C + 8, OY  # mask sheet next to the frame
 
 
@@ -81,7 +83,7 @@ def corner(name, X, Y, fx, fy, mX, mY):
 
     g = f'tooltip-rim-{name}'
     grad(g, Y, Y + c, side, bottom) if fy else grad(g, Y, Y + c, top, side)
-    out.append(f'<g id="{name}"><path d="M{pt(0, c)} A{c},{c} 0 0 {sweep} {pt(c, 0)} L{pt(c, c)} Z" {rgba(fill)}/>'
+    out.append(f'<g id="{name}"><path d="M{pt(0, c)} A{c},{c} 0 0 {sweep} {pt(c, 0)} L{pt(c, c)} Z" {rgba(fill, TINT)}/>'
                f'<path d="{ring(c, c - 1)}" fill="#000" fill-opacity="{outline}"/>'
                f'<path d="{ring(c - 1, c - 2)}" fill="url(#{g})"/></g>')
     out.append(f'<path id="mask-{name}" d="M{mpt(0, c)} A{c},{c} 0 0 {sweep} {mpt(c, 0)} L{mpt(c, c)} Z"/>')
@@ -89,7 +91,7 @@ def corner(name, X, Y, fx, fy, mX, mY):
 
 def edge(name, X, Y, horizontal, outer_at_start, a):
     c = C
-    body = f'<rect x="{X}" y="{Y}" width="{c}" height="{c}" {rgba(fill)}/>'
+    body = f'<rect x="{X}" y="{Y}" width="{c}" height="{c}" {rgba(fill, TINT)}/>'
     if horizontal:
         yo = Y if outer_at_start else Y + c - 1
         yr = Y + 1 if outer_at_start else Y + c - 2
@@ -111,7 +113,7 @@ edge('top', OX + C, OY, True, True, top)
 edge('bottom', OX + C, OY + 2 * C, True, False, bottom)
 edge('left', OX, OY + C, False, True, side)
 edge('right', OX + 2 * C, OY + C, False, False, side)
-out.append(f'<rect id="center" x="{OX + C}" y="{OY + C}" width="{C}" height="{C}" {rgba(fill)}/>')
+out.append(f'<rect id="center" x="{OX + C}" y="{OY + C}" width="{C}" height="{C}" {rgba(fill, TINT)}/>')
 for name, (x, y) in {'top': (C, 0), 'bottom': (C, 2 * C), 'left': (0, C), 'right': (2 * C, C), 'center': (C, C)}.items():
     out.append(f'<rect id="mask-{name}" x="{MX + x}" y="{MY + y}" width="{C}" height="{C}"/>')
 # Stretch edges instead of tiling them.

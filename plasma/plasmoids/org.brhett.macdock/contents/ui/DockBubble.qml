@@ -88,10 +88,10 @@ Item {
             height: bubble.tail + 1
             preferredRendererType: Shape.CurveRenderer
 
-            // A downward tail in the glass's tint with its outline, open at
-            // the top where it meets the body.
+            // A downward tail in the glass's dark tint (make_tooltip.py) with
+            // its outline, open at the top where it meets the body.
             ShapePath {
-                fillColor: Qt.rgba(0.30, 0.30, 0.33, 0.78)
+                fillColor: Qt.rgba(0.149, 0.149, 0.165, 0.75)
                 strokeColor: Qt.rgba(0, 0, 0, 0.22)
                 strokeWidth: 1
                 startX: 0.5; startY: 0
