@@ -1,7 +1,7 @@
 From 8bc856322d026cb3a6f37cd19cb8c90413c07b9a Mon Sep 17 00:00:00 2001
 From: Brhett <36874370+jingledingle521@users.noreply.github.com>
 Date: Sun, 18 Oct 2026 12:55:02 -0500
-Subject: [PATCH 18/34] =?UTF-8?q?Finder:=20AirDrop=20(sidebar=20item,=20pa?=
+Subject: [PATCH 18/35] =?UTF-8?q?Finder:=20AirDrop=20(sidebar=20item,=20pa?=
  =?UTF-8?q?nel,=20Ctrl+Shift+R,=20AirDrop=E2=80=A6=20in=20the=20actions=20?=
  =?UTF-8?q?menu)=20via=20omdrop?=
 MIME-Version: 1.0

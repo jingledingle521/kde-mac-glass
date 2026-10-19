@@ -1,7 +1,7 @@
 From 82b731fd64f107c90d04f7062a18d7bf5fac360b Mon Sep 17 00:00:00 2001
 From: Brhett <36874370+jingledingle521@users.noreply.github.com>
 Date: Sun, 18 Oct 2026 15:18:37 -0500
-Subject: [PATCH 28/34] Finder file chooser: Finder-style Open/Save windows for
+Subject: [PATCH 28/35] Finder file chooser: Finder-style Open/Save windows for
  xdg-desktop-portal
 
 finder-filechooser implements org.freedesktop.impl.portal.FileChooser

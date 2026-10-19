@@ -1,7 +1,7 @@
 From f525d58c39921ed3b2d1b05efaf1f9251d7b22be Mon Sep 17 00:00:00 2001
 From: Brhett <36874370+jingledingle521@users.noreply.github.com>
 Date: Sun, 18 Oct 2026 13:40:40 -0500
-Subject: [PATCH 19/34] Finder AirDrop: transfer progress cards, Share >
+Subject: [PATCH 19/35] Finder AirDrop: transfer progress cards, Share >
  AirDrop sheet with Wi-Fi warning, notifications
 
 FinderAirDrop (one per process) runs omdrop: discovery, peers and sends.

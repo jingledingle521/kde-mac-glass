@@ -1,0 +1,27 @@
+From c4777aa8c3018dc44175190c7d30d3edafef16f1 Mon Sep 17 00:00:00 2001
+From: Brhett <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 21:19:31 -0500
+Subject: [PATCH 35/35] Finder: stoplights another 1.5 px higher
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ src/finder/finderchrome.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/finder/finderchrome.cpp b/src/finder/finderchrome.cpp
+index 970765b0d..bc393c4f5 100644
+--- a/src/finder/finderchrome.cpp
++++ b/src/finder/finderchrome.cpp
+@@ -148,7 +148,7 @@ protected:
+ 
+     QRectF circle(int i) const
+     {
+-        const qreal y = (height() - Diameter) / 2.0 - 1.5; // a touch above centre, as the user preferred
++        const qreal y = (height() - Diameter) / 2.0 - 3; // above centre, as the user preferred
+         return QRectF(LeftMargin + i * (Diameter + Gap), y, Diameter, Diameter);
+     }
+ 
+-- 
+2.56.0
+
