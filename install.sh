@@ -155,8 +155,21 @@ if [ $apply = 1 ]; then
     plasma-apply-lookandfeel --apply org.brhett.macglass --resetLayout
     # Match KWin's blur strength to the saved glass level.
     python3 -I "$data/plasma/desktoptheme/MacGlass/glass/glass.py" blur "$(cat "$data/plasma/desktoptheme/MacGlass/glass/level" 2>/dev/null || echo 40)"
+    # Inter everywhere (font strings need all 16 fields, or Inter renders bold).
     kwriteconfig6 --file kdeglobals --group General --key font "Inter,10,-1,5,400,0,0,0,0,0,0,0,0,0,0,1"
+    kwriteconfig6 --file kdeglobals --group General --key menuFont "Inter,10,-1,5,400,0,0,0,0,0,0,0,0,0,0,1"
+    kwriteconfig6 --file kdeglobals --group General --key toolBarFont "Inter,10,-1,5,400,0,0,0,0,0,0,0,0,0,0,1"
+    kwriteconfig6 --file kdeglobals --group General --key smallestReadableFont "Inter,8,-1,5,400,0,0,0,0,0,0,0,0,0,0,1"
     kwriteconfig6 --file kdeglobals --group WM --key activeFont "Inter,10,-1,5,600,0,0,0,0,0,0,0,0,0,0,1"
+    # The global theme sets Breeze; keep the Mac menus/controls if built.
+    if [ -f "$HOME/.local/lib64/qt6/plugins/styles/libmacglass.so" ]; then
+        kwriteconfig6 --file kdeglobals --group KDE --key widgetStyle MacGlass
+    fi
+    # The Golden Gate wallpaper on the (stock) lock screen too.
+    kwriteconfig6 --file kscreenlockerrc --group Greeter --group Wallpaper --group org.kde.image --group General \
+        --key Image "file://$data/wallpapers/GoldenGate/golden-hour.jpg"
+    kwriteconfig6 --file kscreenlockerrc --group Greeter --group Wallpaper --group org.kde.image --group General \
+        --key PreviewImage "file://$data/wallpapers/GoldenGate/golden-hour.jpg"
     qdbus6 org.kde.KWin /KWin reconfigure >/dev/null 2>&1 || dbus-send --session --dest=org.kde.KWin /KWin org.kde.KWin.reconfigure || true
     if [ $traypatch = 1 ] || [ $lockscreen = 1 ]; then
         systemctl --user restart plasma-plasmashell.service

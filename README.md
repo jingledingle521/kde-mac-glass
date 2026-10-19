@@ -90,6 +90,24 @@ also set it from a terminal:
 - KDE Plasma 6 on Wayland (tested on 6.7, Fedora).
 - Blur and Background Contrast desktop effects enabled. They're on by default.
 - Optional: an app-menu provider such as `appmenu-gtk-module`, so GTK apps show their menus in the menu bar.
+- Build tools: the dock and notifications need a small native helper that
+  the installer compiles (`extras/dock-helper/install.sh` lists the Fedora
+  packages). The Mac menus and controls (`--menus`), Finder and Mac Settings
+  are compiled too.
+
+### Known limits
+
+- Written and used on Fedora 44 with Plasma 6.7.5. Other distributions
+  should work for the theme and widgets; the build scripts use `dnf`, and
+  the tray patch expects Fedora's `/usr/lib64` layout.
+- Finder's patches are for Dolphin 26.08.1 and Mac Settings' for System
+  Settings 6.7.5; other versions may not apply cleanly.
+- `--lockscreen` installs a custom lock screen that its author has since
+  turned off after two lockouts (probably a graphics-driver freeze rather
+  than the lock screen, but unconfirmed). The stock lock screen with the
+  Golden Gate wallpaper, which `--apply` sets, is the safe choice.
+- `extras/sddm` (a matching login screen) is staged but not part of the
+  installer.
 
 ## Remove
 

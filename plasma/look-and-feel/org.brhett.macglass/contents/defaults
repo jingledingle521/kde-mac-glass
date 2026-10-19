@@ -18,3 +18,5 @@ library=org.kde.kwin.aurorae.v2
 theme=__aurorae__svg__MacSequoia-Dark
 ButtonsOnLeft=XIA
 ButtonsOnRight=
+BorderSize=None
+BorderSizeAuto=false
