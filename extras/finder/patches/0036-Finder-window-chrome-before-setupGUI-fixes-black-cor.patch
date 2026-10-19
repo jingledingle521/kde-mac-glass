@@ -1,0 +1,42 @@
+From a71ace931433750b8f921c665d5b473a85c2c7b0 Mon Sep 17 00:00:00 2001
+From: Brhett <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 21:24:25 -0500
+Subject: [PATCH 36/36] Finder: window chrome before setupGUI (fixes black
+ corners)
+
+setupGUI() restores the saved window size, which creates the native
+window; FinderChrome, made after it, marked it translucent too late, so
+the compositor drew it opaque: black square corners and no glass sidebar.
+The chrome is now made first and given the toolbar and sidebar after.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ src/dolphinmainwindow.cpp | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/src/dolphinmainwindow.cpp b/src/dolphinmainwindow.cpp
+index eedfae81b..8d6209789 100644
+--- a/src/dolphinmainwindow.cpp
++++ b/src/dolphinmainwindow.cpp
+@@ -213,11 +213,15 @@ DolphinMainWindow::DolphinMainWindow()
+ #endif
+     setupFileItemActions();
+ 
++    // Finder: our own macOS window chrome instead of the window manager's.
++    // Made before setupGUI(): restoring the saved window size there creates
++    // the native window, and a window made before it's marked translucent
++    // stays opaque (black corners, no glass sidebar).
++    auto *chrome = new FinderChrome(this);
++
+     const bool usePhoneUi{KRuntimePlatform::runtimePlatform().contains(QLatin1String("phone"))};
+     setupGUI(Save | Create | ToolBar, usePhoneUi ? QStringLiteral("finderuiforphones.rc") : QString() /* load the default dolphinui.rc file */);
+ 
+-    // Finder: our own macOS window chrome instead of the window manager's.
+-    auto *chrome = new FinderChrome(this);
+     chrome->setToolBar(toolBar(QStringLiteral("mainToolBar")));
+     chrome->setSidebar(m_placesPanel->parentWidget());
+     stateChanged(QStringLiteral("new_file"));
+-- 
+2.56.0
+

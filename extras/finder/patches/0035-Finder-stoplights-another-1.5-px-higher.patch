@@ -1,7 +1,7 @@
 From c4777aa8c3018dc44175190c7d30d3edafef16f1 Mon Sep 17 00:00:00 2001
 From: Brhett <36874370+jingledingle521@users.noreply.github.com>
 Date: Sun, 18 Oct 2026 21:19:31 -0500
-Subject: [PATCH 35/35] Finder: stoplights another 1.5 px higher
+Subject: [PATCH 35/36] Finder: stoplights another 1.5 px higher
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
