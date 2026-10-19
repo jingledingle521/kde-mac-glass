@@ -1,0 +1,348 @@
+From a12a92da4ac1f36e0fe2d6b06bdc312063651c8f Mon Sep 17 00:00:00 2001
+From: jingledingle521 <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 20:38:56 -0500
+Subject: [PATCH 2/2] Mac Settings: grouped forms; bold titles
+
+Pages' forms as macOS's grouped panels: Kirigami's new forms in their
+"cards" style (KDE_KIRIGAMI_FORMS_STYLE), and classic FormLayouts
+decorated after load (qml/MacFormPanels.qml: a panel behind each run of
+rows, left-aligned labels and section titles, no separator lines).
+Classic pages' titles are bold too.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ app/CMakeLists.txt        |   1 +
+ app/ModuleView.cpp        |  58 ++++++++++++++
+ app/ModuleView.h          |   5 ++
+ app/main.cpp              |   6 ++
+ app/qml/MacFormPanels.qml | 159 ++++++++++++++++++++++++++++++++++++++
+ 5 files changed, 229 insertions(+)
+ create mode 100644 app/qml/MacFormPanels.qml
+
+diff --git a/app/CMakeLists.txt b/app/CMakeLists.txt
+index 145b436b..bf1d326c 100644
+--- a/app/CMakeLists.txt
++++ b/app/CMakeLists.txt
+@@ -32,6 +32,7 @@ ecm_target_qml_sources(systemsettings SOURCES
+     qml/HamburgerMenuButton.qml
+     qml/IntroPage.qml
+     qml/LandingPage.qml
++    qml/MacFormPanels.qml
+     qml/MacTile.qml
+     qml/Main.qml
+     qml/SideBarItem.qml
+diff --git a/app/ModuleView.cpp b/app/ModuleView.cpp
+index 441bf010..fd612a37 100644
+--- a/app/ModuleView.cpp
++++ b/app/ModuleView.cpp
+@@ -14,6 +14,10 @@
+ #include <QDialogButtonBox>
+ #include <QHBoxLayout>
+ #include <QToolButton>
++#include <QQmlEngine>
++#include <QQmlContext>
++#include <QQmlComponent>
++#include <QLabel>
+ #include <functional>
+ #include <QTimer>
+ #include <QDebug>
+@@ -135,6 +139,8 @@ public:
+     // MacSettings: back to the list of pages.
+     QToolButton *mBack = nullptr;
+     bool backVisible = false;
++    // MacSettings: macOS's grouped forms for the pages' FormLayouts.
++    std::unique_ptr<QQmlComponent> formPanels;
+     QPushButton *mReset = nullptr;
+     QPushButton *mDefault = nullptr;
+     QPushButton *mHelp = nullptr;
+@@ -377,6 +383,7 @@ void ModuleView::updatePageIconHeader(KPageWidgetItem *page)
+     updateBackButton();
+     QTimer::singleShot(0, this, &ModuleView::updateBackButton);
+     QTimer::singleShot(250, this, &ModuleView::updateBackButton);
++    QTimer::singleShot(1000, this, &ModuleView::updateBackButton);
+ }
+ 
+ bool ModuleView::resolveChanges()
+@@ -750,6 +757,14 @@ void ModuleView::updateBackButton()
+         d->mBack->resize(d->mBack->sizeHint());
+         d->mBack->raise();
+     }
++    // macOS's bold title (KTitleWidget sets its label's font itself).
++    for (QLabel *label : d->mCustomHeader->findChildren<QLabel *>()) {
++        QFont font = label->font();
++        if (font.weight() != QFont::Bold) {
++            font.setWeight(QFont::Bold);
++            label->setFont(font);
++        }
++    }
+     // Shift the title right to make room for it.
+     d->mCustomHeader->setContentsMargins(18 + room,
+                                          style()->pixelMetric(QStyle::PM_LayoutTopMargin),
+@@ -787,8 +802,51 @@ void ModuleView::updateBackButton()
+                 if (auto rootItem = qobject_cast<QQuickItem *>(root); rootItem && !title.isEmpty()) {
+                     embolden(rootItem);
+                 }
++                // macOS's grouped forms (qml/MacFormPanels.qml).
++                if (auto rootItem = qobject_cast<QQuickItem *>(root)) {
++                    decorateForms(rootItem);
++                }
++                // Sub-pages of the page get the same when they open.
++                if (pageStack) {
++                    connect(pageStack, SIGNAL(currentItemChanged()), this, SLOT(scheduleBackButtonUpdate()), Qt::UniqueConnection);
++                }
++            }
++        }
++    }
++}
++
++void ModuleView::scheduleBackButtonUpdate()
++{
++    QTimer::singleShot(0, this, &ModuleView::updateBackButton);
++    QTimer::singleShot(300, this, &ModuleView::updateBackButton);
++}
++
++void ModuleView::decorateForms(QQuickItem *item)
++{
++    for (QQuickItem *child : item->childItems()) {
++        if (QByteArray(child->metaObject()->className()).startsWith("FormLayout") && !child->property("_macForm").toBool()) {
++            // The form's hidden helper (its second child) sits at its
++            // top-left outside its grid: the panels go in there, below the rows.
++            const QList<QQuickItem *> parts = child->childItems();
++            if (parts.size() >= 2) {
++                if (!d->formPanels) {
++                    d->formPanels = std::make_unique<QQmlComponent>(d->engine.get(), QUrl(QStringLiteral("qrc:/qt/qml/org/kde/systemsettings/MacFormPanels.qml")));
++                }
++                QQmlContext *context = QQmlEngine::contextForObject(child);
++                QObject *panels = d->formPanels->createWithInitialProperties({{QStringLiteral("form"), QVariant::fromValue(child)}},
++                                                                             context ? context : d->engine->rootContext());
++                if (auto panelItem = qobject_cast<QQuickItem *>(panels)) {
++                    parts[1]->setZ(-1);
++                    panelItem->setParentItem(parts[1]);
++                    panelItem->setParent(parts[1]);
++                    child->setProperty("_macForm", true);
++                } else {
++                    qWarning() << "MacSettings: form panels" << d->formPanels->errors();
++                    delete panels;
++                }
+             }
+         }
++        decorateForms(child);
+     }
+ }
+ 
+diff --git a/app/ModuleView.h b/app/ModuleView.h
+index 058c6851..6e761df3 100644
+--- a/app/ModuleView.h
++++ b/app/ModuleView.h
+@@ -37,6 +37,7 @@ class MenuItem;
+  * @author Mathias Soeken <msoeken@informatik.uni-bremen.de>
+  * @author Ben Cooksley <bcooksley@kde.org>
+  */
++class QQuickItem;
+ class ModuleView : public QWidget
+ {
+     Q_OBJECT
+@@ -190,6 +191,9 @@ private Q_SLOTS:
+     void stateChanged();
+     void authStatusChanged(KAuth::Action::AuthStatus status);
+ 
++private Q_SLOTS:
++    void scheduleBackButtonUpdate();
++
+ Q_SIGNALS:
+     /** MacSettings: the ‹ button was clicked. */
+     void backRequested();
+@@ -216,6 +220,7 @@ Q_SIGNALS:
+ 
+ private:
+     void updateBackButton();
++    void decorateForms(QQuickItem *item);
+     class Private;
+     Private *const d;
+ };
+diff --git a/app/main.cpp b/app/main.cpp
+index 5b1834d5..48a13ec3 100644
+--- a/app/main.cpp
++++ b/app/main.cpp
+@@ -24,6 +24,12 @@
+ 
+ int main(int argc, char *argv[])
+ {
++    // MacSettings: Kirigami's forms in their "cards" style: rounded grouped
++    // panels with hairlines between rows, as macOS's System Settings has.
++    if (qEnvironmentVariableIsEmpty("KDE_KIRIGAMI_FORMS_STYLE")) {
++        qputenv("KDE_KIRIGAMI_FORMS_STYLE", "cards");
++    }
++
+     auto format = QSurfaceFormat::defaultFormat();
+     format.setOption(QSurfaceFormat::ResetNotification);
+     QSurfaceFormat::setDefaultFormat(format);
+diff --git a/app/qml/MacFormPanels.qml b/app/qml/MacFormPanels.qml
+new file mode 100644
+index 00000000..0c00ea6e
+--- /dev/null
++++ b/app/qml/MacFormPanels.qml
+@@ -0,0 +1,159 @@
++// SPDX-FileCopyrightText: 2026 Brhett
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++pragma ComponentBehavior: Bound
++
++import QtQuick
++import QtQuick.Layouts
++import org.kde.kirigami as Kirigami
++
++// MacSettings: lays a page's Kirigami.FormLayout out as macOS's System
++// Settings lays out a form: each run of rows between section breaks sits on
++// a rounded panel, section titles and labels are left-aligned, and the
++// separator lines give way to the gaps between panels.
++//
++// ModuleView creates one for every FormLayout on a page, inside the form's
++// own hidden helper item (its second child, at the form's top-left and
++// outside its grid), so it draws in the form's coordinates without becoming
++// a row. It reads the form's private parts (its grid, `knownItems` and
++// `buddies`) and restyles them; if a Kirigami update renames those, it
++// draws nothing and the form looks as stock.
++Item {
++    id: decorator
++
++    required property Item form
++    readonly property Item grid: form && form.children.length > 0 ? form.children[0] : null
++    readonly property real pad: Kirigami.Units.largeSpacing + Kirigami.Units.smallSpacing
++    property var rects: []
++    // A top margin was given to a form flush with its page's top.
++    property bool roomMade: false
++    // Rows already watched for moves.
++    property var watched: []
++
++    function isSection(item: Item): bool {
++        return item && item.Kirigami.FormData.isSection;
++    }
++
++    // Labels and titles to the left, separators hidden, sections spaced.
++    function restyle() {
++        if (!grid || !grid.knownItems) {
++            return;
++        }
++        for (const child of grid.children) {
++            const item = child.item;
++            if (!item) {
++                continue; // the grid's placeholders
++            }
++            if (child instanceof Text) {
++                // A label (Kirigami.Heading).
++                const vertical = child.Layout.alignment & (Qt.AlignTop | Qt.AlignBottom | Qt.AlignVCenter | Qt.AlignBaseline);
++                child.Layout.alignment = Qt.AlignLeft | (vertical || Qt.AlignVCenter);
++                if (isSection(item)) {
++                    child.Layout.bottomMargin = pad;
++                }
++            } else if (isSection(item)) {
++                // The section's own row (a separator, or an empty item).
++                child.Layout.topMargin = pad;
++                child.Layout.bottomMargin = pad;
++                if (item.Kirigami.FormData.label.length === 0) {
++                    item.opacity = 0;
++                }
++            }
++        }
++        for (const item of grid.knownItems) {
++            if (item && watched.indexOf(item) < 0) {
++                watched.push(item);
++                item.yChanged.connect(timer.restart);
++                item.heightChanged.connect(timer.restart);
++                item.visibleChanged.connect(timer.restart);
++            }
++        }
++        timer.restart();
++    }
++
++    // One panel per run of visible rows between section breaks.
++    function update() {
++        if (!grid || !grid.knownItems || !grid.buddies) {
++            rects = [];
++            return;
++        }
++        const groups = [];
++        let current = null;
++        for (let i = 0; i < grid.knownItems.length; ++i) {
++            const item = grid.knownItems[i];
++            if (!item) {
++                continue;
++            }
++            if (isSection(item)) {
++                current = null;
++                continue;
++            }
++            if (!item.visible || item.height <= 0) {
++                continue;
++            }
++            const buddy = grid.buddies[i];
++            let top = item.y;
++            let bottom = item.y + item.height;
++            if (buddy && buddy.visible && buddy.text.length > 0) {
++                top = Math.min(top, buddy.y + grid.y);
++                bottom = Math.max(bottom, buddy.y + grid.y + buddy.height);
++            }
++            if (!current) {
++                current = { top: top, bottom: bottom };
++                groups.push(current);
++            } else {
++                current.top = Math.min(current.top, top);
++                current.bottom = Math.max(current.bottom, bottom);
++            }
++        }
++        // A form flush with the top of its page would push the first
++        // panel out of view: give the form room above it instead (as its
++        // layout's margin, or else by lowering the panels' reach).
++        let topReach = pad;
++        if (groups.length > 0 && groups[0].top - pad < 0) {
++            if (!roomMade && form.Layout) {
++                roomMade = true;
++                form.Layout.topMargin = form.Layout.topMargin + pad;
++                form.Layout.bottomMargin = form.Layout.bottomMargin + pad;
++            }
++            topReach = Math.max(2, groups[0].top);
++        }
++        rects = groups.map((g, i) => ({
++            x: grid.x - pad,
++            y: g.top - (i === 0 ? topReach : pad),
++            width: grid.width + 2 * pad,
++            height: g.bottom - g.top + pad + (i === 0 ? topReach : pad)
++        }));
++    }
++
++    Timer {
++        id: timer
++        interval: 0
++        onTriggered: decorator.update()
++    }
++
++    Connections {
++        target: decorator.grid
++        function onImplicitHeightChanged() { timer.restart(); }
++        function onWidthChanged() { timer.restart(); }
++        function onXChanged() { timer.restart(); }
++        function onKnownItemsChanged() { decorator.restyle(); }
++    }
++
++    Component.onCompleted: restyle()
++
++    Repeater {
++        model: decorator.rects
++        delegate: Rectangle {
++            required property var modelData
++            x: modelData.x
++            y: modelData.y
++            width: modelData.width
++            height: modelData.height
++            radius: 10
++            color: Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g, Kirigami.Theme.textColor.b, 0.05)
++            border.width: 1
++            border.color: Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g, Kirigami.Theme.textColor.b, 0.08)
++        }
++    }
++}
+-- 
+2.56.0
+

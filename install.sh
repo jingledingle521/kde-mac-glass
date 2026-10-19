@@ -10,6 +10,8 @@
 #                              MacGlass widget style: Breeze with Mac menus)
 #   ./install.sh --smooth      ...and animate Plasma at the screen's refresh rate
 #                              (Qt picks 60 fps on some GPUs, e.g. NVIDIA)
+#   ./install.sh --settings    ...and build Mac Settings, System Settings laid
+#                              out as macOS's (needs build tools; ~3 minutes)
 #   ./install.sh --finder      ...and build Finder, a Golden Gate Finder made
 #                              from Dolphin (needs build tools; ~10 minutes)
 #   ./install.sh --airdrop     ...and set up AirDrop for Finder (omdrop-owl +
@@ -22,7 +24,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 data=${XDG_DATA_HOME:-$HOME/.local/share}
 config=${XDG_CONFIG_HOME:-$HOME/.config}
 
-apply=0 icons=0 lockscreen=0 traypatch=0 menus=0 smooth=0 finder=0 airdrop=0
+apply=0 icons=0 lockscreen=0 traypatch=0 menus=0 smooth=0 settings=0 finder=0 airdrop=0
 for arg in "$@"; do
     case $arg in
         --apply) apply=1 ;;
@@ -31,9 +33,10 @@ for arg in "$@"; do
         --tray-patch) traypatch=1 ;;
         --menus) menus=1 ;;
         --smooth) smooth=1 ;;
+        --settings) settings=1 ;;
         --finder) finder=1 ;;
         --airdrop) airdrop=1 ;;
-        -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $arg" >&2; exit 2 ;;
     esac
 done
@@ -128,6 +131,11 @@ if [ $smooth = 1 ]; then
     mkdir -p "$config/systemd/user/plasma-plasmashell.service.d"
     cp "$here/extras/smooth/threaded-render.conf" "$config/systemd/user/plasma-plasmashell.service.d/"
     systemctl --user daemon-reload 2>/dev/null || true
+fi
+
+if [ $settings = 1 ]; then
+    echo "Building Mac Settings…"
+    "$here/extras/settings/build-settings" || echo "  Mac Settings build failed; run extras/settings/build-settings --deps to install build tools."
 fi
 
 if [ $finder = 1 ]; then

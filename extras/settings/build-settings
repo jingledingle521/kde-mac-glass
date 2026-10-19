@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Build Mac Settings (KDE's System Settings restyled as macOS's) and install
+# it for the current user: into ~/.local/opt/settings, with a `systemsettings`
+# in ~/.local/bin so the desktop, the Apple menu and other apps' "Configure…"
+# links open it. Stock System Settings stays installed (/usr/bin/systemsettings);
+# delete ~/.local/bin/systemsettings to go back to it.
+#
+#   build-settings            build and install
+#   build-settings --deps     first install System Settings' build dependencies
+#                             (asks for your password through the KDE root prompt)
+set -euo pipefail
+
+here=$(cd "$(dirname "$0")" && pwd)
+version=v6.7.5                 # the System Settings release the patches apply to
+src=${XDG_CACHE_HOME:-$HOME/.cache}/mac-glass-kde/settings-src
+prefix=$HOME/.local/opt/settings
+
+if [ "${1:-}" = --deps ]; then
+    pkexec dnf -y builddep plasma-systemsettings
+fi
+
+for tool in git cmake ninja g++; do
+    command -v "$tool" >/dev/null || { echo "missing $tool (try: build-settings --deps)" >&2; exit 1; }
+done
+
+installed=$(QT_QPA_PLATFORM=offscreen /usr/bin/systemsettings --version 2>/dev/null | awk '{print $2}') || installed=""
+if [ -n "$installed" ] && [ "v$installed" != "$version" ]; then
+    echo "Note: your Plasma's System Settings is $installed; the patches are for ${version#v}." >&2
+fi
+
+if [ ! -d "$src/.git" ]; then
+    mkdir -p "$(dirname "$src")"
+    git clone --branch "$version" --depth 1 https://invent.kde.org/plasma/systemsettings.git "$src"
+fi
+cd "$src"
+git checkout -q -f "$version"
+git -c user.name=MacSettings -c user.email=settings@localhost am -q --abort 2>/dev/null || true
+git -c user.name=MacSettings -c user.email=settings@localhost am -q "$here"/patches/*.patch
+
+cmake -S "$src" -B "$src/build" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix" -DBUILD_TESTING=OFF -Wno-dev >/dev/null
+ninja -C "$src/build" install >/dev/null
+
+mkdir -p "$HOME/.local/bin"
+cat > "$HOME/.local/bin/systemsettings" <<'WRAPPER'
+#!/bin/sh
+# Mac Settings: the macOS-style System Settings (mac-glass-kde extras/settings).
+# Delete this file to go back to the stock app (/usr/bin/systemsettings).
+exec "$HOME/.local/opt/settings/bin/systemsettings" "$@"
+WRAPPER
+chmod +x "$HOME/.local/bin/systemsettings"
+echo "Mac Settings installed in $prefix; 'systemsettings' now opens it."

@@ -1,0 +1,1988 @@
+From ecf17b084ea1dd798e192d09356f95a29b0a2471 Mon Sep 17 00:00:00 2001
+From: jingledingle521 <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 20:23:47 -0500
+Subject: [PATCH 1/2] Mac Settings: macOS System Settings sidebar, window and
+ navigation
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The sidebar is macOS's: the user's account, then macOS's groups with
+coloured tiles (qml/Entries.js maps each entry to KDE pages). An entry
+with several pages opens their list (LandingPage.qml), which drills in
+with ‹ back. The window has no title bar (SettingsChrome, shared with
+Golden Gate Finder): rounded, shadowed, glass sidebar with stoplights.
+Page headers blend into the page with a bold title; no Help button and
+no icons on the buttons.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ app/CMakeLists.txt      |   5 +
+ app/ModuleView.cpp      | 152 ++++++++++++---
+ app/ModuleView.h        |  13 ++
+ app/SettingsBase.cpp    |   7 +
+ app/SettingsBase.h      |   4 +
+ app/SettingsChrome.cpp  | 398 ++++++++++++++++++++++++++++++++++++++++
+ app/SettingsChrome.h    |  62 +++++++
+ app/SidebarMode.cpp     | 213 +++++++++++++++++++++
+ app/SidebarMode.h       |  45 +++++
+ app/qml/Entries.js      | 132 +++++++++++++
+ app/qml/LandingPage.qml | 153 +++++++++++++++
+ app/qml/MacTile.qml     |  34 ++++
+ app/qml/Main.qml        | 392 +++++++++++++++++++++++++++++++++++----
+ 13 files changed, 1552 insertions(+), 58 deletions(-)
+ create mode 100644 app/SettingsChrome.cpp
+ create mode 100644 app/SettingsChrome.h
+ create mode 100644 app/qml/Entries.js
+ create mode 100644 app/qml/LandingPage.qml
+ create mode 100644 app/qml/MacTile.qml
+
+diff --git a/app/CMakeLists.txt b/app/CMakeLists.txt
+index 9c2e3275..145b436b 100644
+--- a/app/CMakeLists.txt
++++ b/app/CMakeLists.txt
+@@ -8,6 +8,8 @@ target_sources(systemsettings PRIVATE
+     main.cpp
+     SettingsBase.cpp
+     SettingsBase.h
++    SettingsChrome.cpp
++    SettingsChrome.h
+     SidebarMode.cpp
+     SidebarMode.h
+     ExternalAppModule.cpp
+@@ -26,8 +28,11 @@ target_sources(systemsettings PRIVATE
+ ecm_target_qml_sources(systemsettings SOURCES
+     qml/CategoriesPage.qml
+     qml/CategoryItem.qml
++    qml/Entries.js
+     qml/HamburgerMenuButton.qml
+     qml/IntroPage.qml
++    qml/LandingPage.qml
++    qml/MacTile.qml
+     qml/Main.qml
+     qml/SideBarItem.qml
+     qml/SubCategoryPage.qml
+diff --git a/app/ModuleView.cpp b/app/ModuleView.cpp
+index 6ded0eb9..441bf010 100644
+--- a/app/ModuleView.cpp
++++ b/app/ModuleView.cpp
+@@ -12,6 +12,15 @@
+ 
+ #include <QDesktopServices>
+ #include <QDialogButtonBox>
++#include <QHBoxLayout>
++#include <QToolButton>
++#include <functional>
++#include <QTimer>
++#include <QDebug>
++#include <QMouseEvent>
++#include <QWindow>
++#include <QQuickItem>
++#include <QQuickWidget>
+ #include <QKeyEvent>
+ #include <QLoggingCategory>
+ #include <QMap>
+@@ -40,6 +49,11 @@
+ 
+ #include <cmath>
+ 
++// MacSettings: space above the page, under the window's rounded corners;
++// room for the ‹ button before the title.
++constexpr int TopGap = 10;
++constexpr int BackRoom = 30;
++
+ class CustomTitle : public KTitleWidget
+ {
+     Q_OBJECT
+@@ -56,6 +70,10 @@ CustomTitle::CustomTitle(QWidget *parent)
+     : KTitleWidget(parent)
+ {
+     setTextSelectable(false);
++    // MacSettings: macOS's bold page title.
++    QFont title = font();
++    title.setWeight(QFont::Bold);
++    setFont(title);
+     // Use the same left margin as QML titles for consistency (Kirigami/AbstractPageHeader.qml)
+     // 18px is Standard Kirigami gridUnit for 10pt Noto Sans.
+     // TODO: make this use a real gridUnit so it will adjust to the user's font,
+@@ -97,24 +115,8 @@ void CustomTitle::colorsChanged()
+ 
+ void CustomTitle::paintEvent(QPaintEvent *event)
+ {
++    // MacSettings: a macOS toolbar title: no band of colour, no separator.
+     KTitleWidget::paintEvent(event);
+-
+-    auto linearlyInterpolateDouble = [](double one, double two, double factor) {
+-        return one + (two - one) * factor;
+-    };
+-
+-    QPainter p(this);
+-
+-    const QColor window = palette().color(QPalette::Window);
+-    const QColor text = palette().color(QPalette::Text);
+-    const qreal balance = 0.2;
+-
+-    const QColor separator = QColor::fromHsv(std::fmod(linearlyInterpolateDouble(window.hue(), text.hue(), balance), 360.0),
+-                                             qBound(0.0, linearlyInterpolateDouble(window.saturation(), text.saturation(), balance), 255.0),
+-                                             qBound(0.0, linearlyInterpolateDouble(window.value(), text.value(), balance), 255.0),
+-                                             qBound(0.0, linearlyInterpolateDouble(window.alpha(), text.alpha(), balance), 255.0));
+-    p.fillRect(event->rect(), window);
+-    p.fillRect(QRect(QPoint(0, height() - 1), QSize(width(), 1)), separator);
+ }
+ 
+ class ModuleView::Private
+@@ -130,6 +132,9 @@ public:
+     QVBoxLayout *mLayout = nullptr;
+     QDialogButtonBox *mButtons = nullptr;
+     QPushButton *mApply = nullptr;
++    // MacSettings: back to the list of pages.
++    QToolButton *mBack = nullptr;
++    bool backVisible = false;
+     QPushButton *mReset = nullptr;
+     QPushButton *mDefault = nullptr;
+     QPushButton *mHelp = nullptr;
+@@ -157,7 +162,18 @@ ModuleView::ModuleView(const std::shared_ptr<QQmlEngine> &engine, QWidget *paren
+     d->mCustomHeader = new CustomTitle(this);
+     d->mCustomHeader->setVisible(false);
+ 
++    // MacSettings: the window has no title bar. Leave room under its
++    // rounded corners (empty space here moves the window, see
++    // mousePressEvent), and float the ‹ button for pages opened from a list
++    // over the start of the page's header (setBackVisible).
++    rootLayout->setContentsMargins(0, TopGap, 0, 0);
+     rootLayout->addWidget(d->mCustomHeader);
++    d->mBack = new QToolButton(this);
++    d->mBack->setIcon(QIcon::fromTheme(QStringLiteral("go-previous")));
++    d->mBack->setAutoRaise(true);
++    d->mBack->setToolTip(i18nc("@info:tooltip", "Back"));
++    d->mBack->setVisible(false);
++    connect(d->mBack, &QToolButton::clicked, this, &ModuleView::backRequested);
+     rootLayout->addItem(d->mLayout);
+     // d->mPageWidget->setPageHeader(d->mCustomHeader);
+     d->mPageWidget->layout()->setContentsMargins(0, 0, 0, 0);
+@@ -174,7 +190,7 @@ ModuleView::ModuleView(const std::shared_ptr<QQmlEngine> &engine, QWidget *paren
+ 
+     // Create the buttons in it
+     d->mApply = d->mButtons->addButton(QDialogButtonBox::Apply);
+-    d->mApplyIcon = d->mApply->icon();
++    d->mApplyIcon = QIcon(); // MacSettings: no icons on buttons
+     KGuiItem::assign(d->mApply, KStandardGuiItem::apply());
+     d->mDefault = d->mButtons->addButton(QDialogButtonBox::RestoreDefaults);
+     KGuiItem::assign(d->mDefault, KStandardGuiItem::defaults());
+@@ -182,6 +198,12 @@ ModuleView::ModuleView(const std::shared_ptr<QQmlEngine> &engine, QWidget *paren
+     KGuiItem::assign(d->mReset, KStandardGuiItem::reset());
+     d->mHelp = d->mButtons->addButton(QDialogButtonBox::Help);
+     KGuiItem::assign(d->mHelp, KStandardGuiItem::help());
++    // MacSettings: macOS's buttons carry no icons, and there is no Help
++    // button (F1 still opens the page's handbook).
++    for (QPushButton *button : {d->mApply, d->mDefault, d->mReset, d->mHelp}) {
++        button->setIcon(QIcon());
++    }
++
+     // Set some more sensible tooltips
+     d->mReset->setToolTip(i18n("Reset all current changes to previous values"));
+     // Set Auto-Default mode ( KDE Bug #211187 )
+@@ -349,6 +371,12 @@ void ModuleView::updatePageIconHeader(KPageWidgetItem *page)
+             d->mCustomHeader->hide();
+         }
+     }
++
++    // MacSettings: make room for ‹ in the page's header, and restyle it:
++    // again once a QML page has built its header.
++    updateBackButton();
++    QTimer::singleShot(0, this, &ModuleView::updateBackButton);
++    QTimer::singleShot(250, this, &ModuleView::updateBackButton);
+ }
+ 
+ bool ModuleView::resolveChanges()
+@@ -545,14 +573,15 @@ void ModuleView::updateButtons()
+     d->mReset->setEnabled(change);
+     d->mReset->setVisible(buttons & KCModule::Apply);
+     d->mHelp->setEnabled(buttons & KCModule::Help);
+-    d->mHelp->setVisible(buttons & KCModule::Help);
++    // MacSettings: no Help button; F1 still works when the page has help.
++    d->mHelp->setVisible(false);
+ 
+     d->mButtons->setVisible(buttons != KCModule::NoAdditionalButton);
+ }
+ 
+ void ModuleView::keyPressEvent(QKeyEvent *event)
+ {
+-    if (event->key() == Qt::Key_F1 && d->mHelp->isVisible() && d->mHelp->isEnabled()) {
++    if (event->key() == Qt::Key_F1 && d->mHelp->isEnabled()) {
+         d->mHelp->animateClick();
+         event->accept();
+         return;
+@@ -703,6 +732,87 @@ bool ModuleView::eventFilter(QObject *watched, QEvent *event)
+     return QWidget::eventFilter(watched, event);
+ }
+ 
++void ModuleView::setBackVisible(bool visible)
++{
++    d->backVisible = visible;
++    updateBackButton();
++}
++
++void ModuleView::updateBackButton()
++{
++    const bool visible = d->backVisible;
++    const int room = visible ? BackRoom : 0;
++    d->mBack->setVisible(visible);
++    if (visible) {
++        // Centred on the page's header: the QML header or our title row.
++        const int headerHeight = d->mCustomHeader->isVisible() ? d->mCustomHeader->height() : 46;
++        d->mBack->move(8, TopGap + (headerHeight - d->mBack->sizeHint().height()) / 2);
++        d->mBack->resize(d->mBack->sizeHint());
++        d->mBack->raise();
++    }
++    // Shift the title right to make room for it.
++    d->mCustomHeader->setContentsMargins(18 + room,
++                                         style()->pixelMetric(QStyle::PM_LayoutTopMargin),
++                                         style()->pixelMetric(QStyle::PM_LayoutRightMargin),
++                                         style()->pixelMetric(QStyle::PM_LayoutBottomMargin));
++    KCModule *kcm = d->mPages.value(d->mPageWidget->currentPage());
++    if (kcm && kcm->inherits("KCModuleQml")) {
++        if (auto quick = kcm->widget()->findChild<QQuickWidget *>()) {
++            if (QObject *root = quick->rootObject()) {
++                auto pageStack = root->property("pageStack").value<QObject *>();
++                auto toolBar = pageStack ? pageStack->property("globalToolBar").value<QObject *>() : nullptr;
++                if (toolBar) {
++                    // Kirigami's default is one grid unit (18 px).
++                    toolBar->setProperty("titleLeftPadding", 18 + room);
++                    // A macOS toolbar: the page's own colour, no separator.
++                    toolBar->setProperty("separatorVisible", false);
++                    toolBar->setProperty("colorSet", 1); // Kirigami.Theme.Window
++                }
++                // And a bold title: the header's Kirigami.Heading showing the
++                // current page's title (headers live in the visual tree).
++                QObject *currentPage = pageStack ? pageStack->property("currentItem").value<QObject *>() : nullptr;
++                const QString title = currentPage ? currentPage->property("title").toString() : QString();
++                std::function<void(QQuickItem *)> embolden = [&](QQuickItem *item) {
++                    for (QQuickItem *child : item->childItems()) {
++                        if (QByteArray(child->metaObject()->className()).startsWith("Heading") && child->property("text").toString() == title) {
++                            QFont font = child->property("font").value<QFont>();
++                            if (font.weight() != QFont::Bold) {
++                                font.setWeight(QFont::Bold);
++                                child->setProperty("font", font);
++                            }
++                        }
++                        embolden(child);
++                    }
++                };
++                if (auto rootItem = qobject_cast<QQuickItem *>(root); rootItem && !title.isEmpty()) {
++                    embolden(rootItem);
++                }
++            }
++        }
++    }
++}
++
++void ModuleView::mousePressEvent(QMouseEvent *event)
++{
++    // MacSettings: empty space around the page (above it, its title row,
++    // the button row) moves the window, as a title bar would.
++    if (event->button() == Qt::LeftButton) {
++        if (QWindow *handle = window()->windowHandle()) {
++            handle->startSystemMove();
++            return;
++        }
++    }
++    QWidget::mousePressEvent(event);
++}
++
++void ModuleView::mouseDoubleClickEvent(QMouseEvent *event)
++{
++    if (event->button() == Qt::LeftButton) {
++        window()->isMaximized() ? window()->showNormal() : window()->showMaximized();
++        return;
++    }
++    QWidget::mouseDoubleClickEvent(event);
++}
++
+ #include "moc_ModuleView.cpp"
+ #include "ModuleView.moc"
+-
+diff --git a/app/ModuleView.h b/app/ModuleView.h
+index e7997d36..058c6851 100644
+--- a/app/ModuleView.h
++++ b/app/ModuleView.h
+@@ -132,6 +132,16 @@ public:
+      */
+     KPluginMetaData activeModuleMetadata() const;
+ 
++    /** MacSettings: shows the ‹ button that goes back to the list of pages
++     *  this one was opened from. */
++    void setBackVisible(bool visible);
++
++protected:
++    void mousePressEvent(QMouseEvent *event) override;
++    void mouseDoubleClickEvent(QMouseEvent *event) override;
++
++public:
++
+ public Q_SLOTS:
+     /**
+      * Loads the module specified by menuItem.\n
+@@ -181,6 +191,8 @@ private Q_SLOTS:
+     void authStatusChanged(KAuth::Action::AuthStatus status);
+ 
+ Q_SIGNALS:
++    /** MacSettings: the ‹ button was clicked. */
++    void backRequested();
+     /**
+      * Emitted when the currently active module is changed. This occurs whenever the active module or
+      * its configuration changes. This causes the window caption to update.
+@@ -203,6 +215,7 @@ Q_SIGNALS:
+     void showDefaultsIndicatorsChanged(bool show);
+ 
+ private:
++    void updateBackButton();
+     class Private;
+     Private *const d;
+ };
+diff --git a/app/SettingsBase.cpp b/app/SettingsBase.cpp
+index 87645dad..05bd7da7 100644
+--- a/app/SettingsBase.cpp
++++ b/app/SettingsBase.cpp
+@@ -7,6 +7,7 @@
+  */
+ 
+ #include "SettingsBase.h"
++#include "SettingsChrome.h"
+ #include "ModuleView.h"
+ #include "SidebarMode.h"
+ #include "kcmmetadatahelpers.h"
+@@ -41,6 +42,9 @@ SettingsBase::SettingsBase(SidebarMode::ApplicationMode mode, const QString &sta
+     , m_actionCollection(new KActionCollection(this))
+     , m_helpMenu(new KHelpMenu(this))
+ {
++    // MacSettings: macOS's window: no title bar, glass sidebar to the top.
++    m_chrome = new SettingsChrome(this);
++
+     // Prepare the view area
+     stackedWidget = new QStackedWidget(this);
+     setCentralWidget(stackedWidget);
+@@ -284,6 +288,9 @@ void SettingsBase::loadCurrentView()
+ 
+     stackedWidget->setCurrentWidget(view->mainWidget());
+ 
++    m_chrome->setSidebar(view->sidebarWidget());
++    view->setChrome(m_chrome);
++
+     view->giveFocus();
+ 
+     // Update visibility of the "report a bug on this page" and "report bug in general"
+diff --git a/app/SettingsBase.h b/app/SettingsBase.h
+index b89279d8..c82b1d6c 100644
+--- a/app/SettingsBase.h
++++ b/app/SettingsBase.h
+@@ -23,6 +23,8 @@
+ class QScreen;
+ class KHelpMenu;
+ 
++class SettingsChrome;
++
+ class SettingsBase : public KMainWindow
+ {
+     Q_OBJECT
+@@ -88,5 +90,7 @@ private:
+     QStringList m_startupModuleArgs;
+     KActionCollection *m_actionCollection;
+     KHelpMenu *m_helpMenu;
++    // MacSettings: the window frame.
++    SettingsChrome *m_chrome = nullptr;
+ };
+ #endif
+diff --git a/app/SettingsChrome.cpp b/app/SettingsChrome.cpp
+new file mode 100644
+index 00000000..15edae0c
+--- /dev/null
++++ b/app/SettingsChrome.cpp
+@@ -0,0 +1,398 @@
++/*
++    SPDX-FileCopyrightText: 2026 Brhett
++
++    SPDX-License-Identifier: GPL-2.0-or-later
++*/
++
++#include "SettingsChrome.h"
++
++#include <KWindowEffects>
++#include <KWindowShadow>
++
++#include <QEvent>
++#include <QGuiApplication>
++#include <QMainWindow>
++#include <QMouseEvent>
++#include <QPainter>
++#include <QPainterPath>
++#include <QTimer>
++#include <QWindow>
++
++#include <algorithm>
++#include <vector>
++
++// Window frame shared with Finder (Golden Gate Finder's FinderChrome).
++
++namespace
++{
++constexpr int WindowRadius = 12; // macOS window corner radius
++constexpr int ResizeBorder = 6; // grab zone along the edges, inside the window
++constexpr int ShadowSize = 32; // how far the shadow reaches outside the window
++
++const QColor HairlineDark(0, 0, 0, 90);
++const QColor HairlineLight(255, 255, 255, 18);
++
++// Box-blurs the alpha channel of a premultiplied ARGB image (three passes of
++// a box blur approximate a Gaussian).
++void blurAlpha(QImage &image, int radius)
++{
++    const int w = image.width();
++    const int h = image.height();
++    std::vector<int> alpha(w * h);
++    for (int y = 0; y < h; ++y) {
++        const QRgb *line = reinterpret_cast<const QRgb *>(image.constScanLine(y));
++        for (int x = 0; x < w; ++x) {
++            alpha[y * w + x] = qAlpha(line[x]);
++        }
++    }
++    std::vector<int> tmp(w * h);
++    auto pass = [&](bool horizontal) {
++        const int len = horizontal ? w : h;
++        const int lines = horizontal ? h : w;
++        for (int l = 0; l < lines; ++l) {
++            auto at = [&](int i) -> int & {
++                return horizontal ? alpha[l * w + i] : alpha[i * w + l];
++            };
++            auto out = [&](int i) -> int & {
++                return horizontal ? tmp[l * w + i] : tmp[i * w + l];
++            };
++            int sum = 0;
++            for (int i = -radius; i <= radius; ++i) {
++                sum += at(std::clamp(i, 0, len - 1));
++            }
++            for (int i = 0; i < len; ++i) {
++                out(i) = sum / (2 * radius + 1);
++                sum += at(std::clamp(i + radius + 1, 0, len - 1)) - at(std::clamp(i - radius, 0, len - 1));
++            }
++        }
++        alpha.swap(tmp);
++    };
++    for (int i = 0; i < 3; ++i) {
++        pass(true);
++        pass(false);
++    }
++    for (int y = 0; y < h; ++y) {
++        QRgb *line = reinterpret_cast<QRgb *>(image.scanLine(y));
++        for (int x = 0; x < w; ++x) {
++            line[x] = qRgba(0, 0, 0, alpha[y * w + x]);
++        }
++    }
++}
++
++QPainterPath roundedPath(const QRectF &rect, qreal radius)
++{
++    QPainterPath path;
++    path.addRoundedRect(rect, radius, radius);
++    return path;
++}
++
++Qt::CursorShape cursorFor(Qt::Edges edges)
++{
++    if (edges == (Qt::TopEdge | Qt::LeftEdge) || edges == (Qt::BottomEdge | Qt::RightEdge)) {
++        return Qt::SizeFDiagCursor;
++    }
++    if (edges == (Qt::TopEdge | Qt::RightEdge) || edges == (Qt::BottomEdge | Qt::LeftEdge)) {
++        return Qt::SizeBDiagCursor;
++    }
++    if (edges & (Qt::LeftEdge | Qt::RightEdge)) {
++        return Qt::SizeHorCursor;
++    }
++    return Qt::SizeVerCursor;
++}
++}
++
++SettingsChrome::SettingsChrome(QMainWindow *window)
++    : QObject(window)
++    , m_window(window)
++{
++    window->setWindowFlag(Qt::FramelessWindowHint, true);
++    window->setAttribute(Qt::WA_TranslucentBackground, true);
++    window->installEventFilter(this);
++}
++
++SettingsChrome::~SettingsChrome() = default;
++
++QColor SettingsChrome::sidebarColor()
++{
++    // Darker than Finder's: light text sits on it over any wallpaper.
++    return QColor(36, 36, 40, 215);
++}
++
++QColor SettingsChrome::contentColor() const
++{
++    return m_window->palette().color(QPalette::Window);
++}
++
++void SettingsChrome::setSidebar(QWidget *sidebar)
++{
++    if (m_sidebar) {
++        m_sidebar->removeEventFilter(this);
++    }
++    m_sidebar = sidebar;
++    if (sidebar) {
++        sidebar->installEventFilter(this);
++    }
++    updateWindowEffects();
++    m_window->update();
++}
++
++bool SettingsChrome::isMaximized() const
++{
++    return m_window->windowState() & (Qt::WindowMaximized | Qt::WindowFullScreen);
++}
++
++int SettingsChrome::radius() const
++{
++    return isMaximized() ? 0 : WindowRadius;
++}
++
++Qt::Edges SettingsChrome::edgesAt(const QPointF &pos) const
++{
++    Qt::Edges edges;
++    if (isMaximized()) {
++        return edges;
++    }
++    const int corner = WindowRadius;
++    const QRectF r = m_window->rect();
++    if (pos.x() < ResizeBorder) {
++        edges |= Qt::LeftEdge;
++    } else if (pos.x() > r.width() - ResizeBorder) {
++        edges |= Qt::RightEdge;
++    }
++    if (pos.y() < ResizeBorder) {
++        edges |= Qt::TopEdge;
++    } else if (pos.y() > r.height() - ResizeBorder) {
++        edges |= Qt::BottomEdge;
++    }
++    // Generous diagonal grab near the corners.
++    if (edges == Qt::LeftEdge || edges == Qt::RightEdge) {
++        if (pos.y() < corner) {
++            edges |= Qt::TopEdge;
++        } else if (pos.y() > r.height() - corner) {
++            edges |= Qt::BottomEdge;
++        }
++    } else if (edges == Qt::TopEdge || edges == Qt::BottomEdge) {
++        if (pos.x() < corner) {
++            edges |= Qt::LeftEdge;
++        } else if (pos.x() > r.width() - corner) {
++            edges |= Qt::RightEdge;
++        }
++    }
++    return edges;
++}
++
++bool SettingsChrome::eventFilter(QObject *watched, QEvent *event)
++{
++    if (watched == m_window) {
++        switch (event->type()) {
++        case QEvent::Paint:
++            // Only our background: QMainWindow's own would paint the style's
++            // window colour over the glass.
++            paintBackground();
++            return true;
++        case QEvent::Show:
++            if (QWindow *handle = m_window->windowHandle()) {
++                handle->removeEventFilter(this);
++                handle->installEventFilter(this);
++            }
++            updateWindowEffects();
++            updateShadow();
++            break;
++        case QEvent::Resize:
++            updateWindowEffects();
++            break;
++        case QEvent::WindowStateChange:
++            updateWindowEffects();
++            updateShadow();
++            m_window->update();
++            break;
++        case QEvent::ActivationChange:
++            Q_EMIT activeChanged();
++            break;
++        default:
++            break;
++        }
++        return false;
++    }
++
++    if (watched == m_sidebar) {
++        if (event->type() == QEvent::Resize || event->type() == QEvent::Move || event->type() == QEvent::Show || event->type() == QEvent::Hide) {
++            updateWindowEffects();
++            m_window->update();
++        }
++        return false;
++    }
++
++    if (watched == m_window->windowHandle()) {
++        switch (event->type()) {
++        case QEvent::PlatformSurface:
++            // A new native surface has none of our effects yet.
++            m_surfaceReady = false;
++            m_appliedBlur = QRegion();
++            m_blurApplied = false;
++            break;
++        case QEvent::Expose:
++            // The Wayland surface exists only once the window is exposed;
++            // apply the effects then, once per surface.
++            if (!m_surfaceReady && m_window->windowHandle()->isExposed()) {
++                m_surfaceReady = true;
++                QTimer::singleShot(0, this, [this]() {
++                    updateWindowEffects();
++                    updateShadow();
++                });
++            }
++            break;
++        case QEvent::MouseMove: {
++            // Resizing from the window edges (there is no frame to grab).
++            auto *e = static_cast<QMouseEvent *>(event);
++            if (e->buttons() != Qt::NoButton) {
++                break;
++            }
++            const Qt::Edges edges = edgesAt(e->position());
++            if (edges != m_cursorEdges) {
++                if (m_cursorEdges) {
++                    QGuiApplication::restoreOverrideCursor();
++                }
++                if (edges) {
++                    QGuiApplication::setOverrideCursor(cursorFor(edges));
++                }
++                m_cursorEdges = edges;
++            }
++            break;
++        }
++        case QEvent::Leave:
++            if (m_cursorEdges) {
++                QGuiApplication::restoreOverrideCursor();
++                m_cursorEdges = {};
++            }
++            break;
++        case QEvent::MouseButtonPress: {
++            auto *e = static_cast<QMouseEvent *>(event);
++            const Qt::Edges edges = edgesAt(e->position());
++            if (e->button() == Qt::LeftButton && edges) {
++                m_window->windowHandle()->startSystemResize(edges);
++                return true;
++            }
++            break;
++        }
++        default:
++            break;
++        }
++    }
++    return false;
++}
++
++void SettingsChrome::paintBackground()
++{
++    QPainter p(m_window);
++    p.setRenderHint(QPainter::Antialiasing);
++    const QRectF r = QRectF(m_window->rect());
++
++    p.setClipPath(roundedPath(r, radius()));
++    p.fillRect(r, contentColor());
++
++    // Glass sidebar: a translucent tint KWin blurs behind, then a hairline.
++    if (m_sidebar && m_sidebar->isVisible()) {
++        const QRect s(m_sidebar->mapTo(m_window, QPoint(0, 0)), m_sidebar->size());
++        const QRectF strip(0, 0, s.right() + 1, r.height());
++        p.setCompositionMode(QPainter::CompositionMode_Source);
++        p.fillRect(strip, sidebarColor());
++        p.setCompositionMode(QPainter::CompositionMode_SourceOver);
++        p.fillRect(QRectF(strip.right(), strip.top(), 1, strip.height()), HairlineDark);
++    }
++
++    // Light inner edge around the whole window, like macOS's window border.
++    p.setClipping(false);
++    if (radius() > 0) {
++        p.setPen(QPen(HairlineLight, 1));
++        p.setBrush(Qt::NoBrush);
++        p.drawPath(roundedPath(r.adjusted(0.5, 0.5, -0.5, -0.5), radius() - 0.5));
++    }
++}
++
++void SettingsChrome::updateWindowEffects()
++{
++    QWindow *handle = m_window->windowHandle();
++    if (!handle) {
++        return;
++    }
++    QRegion blur;
++    if (m_sidebar && m_sidebar->isVisible()) {
++        const QRect s(m_sidebar->mapTo(m_window, QPoint(0, 0)), m_sidebar->size());
++        const QRect strip(0, 0, s.right() + 1, m_window->height());
++        // Keep the blur inside the rounded corner.
++        const QPolygon shape = roundedPath(QRectF(m_window->rect()), radius()).toFillPolygon().toPolygon();
++        blur = QRegion(strip).intersected(QRegion(shape));
++    }
++    if (m_blurApplied && blur == m_appliedBlur) {
++        return; // unchanged; don't bother KWin
++    }
++    KWindowEffects::enableBlurBehind(handle, !blur.isEmpty(), blur);
++    m_appliedBlur = blur;
++    m_blurApplied = true;
++}
++
++void SettingsChrome::updateShadow()
++{
++    QWindow *handle = m_window->windowHandle();
++    if (!handle) {
++        return;
++    }
++    if (isMaximized()) {
++        if (m_shadow) {
++            m_shadow->destroy();
++        }
++        return;
++    }
++    if (!m_shadow) {
++        // Shadow tiles: a blurred rounded rectangle with the window's own
++        // shape cut out, sliced into corners and 1 px edge strips.
++        const int r = WindowRadius;
++        const int pad = ShadowSize;
++        const int size = 2 * pad + 2 * r + 1;
++        QImage image(size, size, QImage::Format_ARGB32_Premultiplied);
++        image.fill(Qt::transparent);
++        {
++            QPainter p(&image);
++            p.setRenderHint(QPainter::Antialiasing);
++            p.setPen(Qt::NoPen);
++            p.setBrush(QColor(0, 0, 0, 120));
++            p.drawPath(roundedPath(QRectF(pad, pad + 6, size - 2 * pad, size - 2 * pad), r));
++        }
++        blurAlpha(image, pad / 3);
++        {
++            QPainter p(&image);
++            p.setRenderHint(QPainter::Antialiasing);
++            p.setCompositionMode(QPainter::CompositionMode_Clear);
++            p.setPen(Qt::NoPen);
++            p.setBrush(Qt::black);
++            p.drawPath(roundedPath(QRectF(pad, pad, size - 2 * pad, size - 2 * pad), r));
++        }
++        auto tile = [&](const QRect &rect) {
++            auto t = KWindowShadowTile::Ptr::create();
++            t->setImage(image.copy(rect));
++            return t;
++        };
++        const int c = pad + r; // corner tile size
++        m_shadow = new KWindowShadow(this);
++        m_shadow->setTopLeftTile(tile(QRect(0, 0, c, c)));
++        m_shadow->setTopTile(tile(QRect(c, 0, 1, pad)));
++        m_shadow->setTopRightTile(tile(QRect(c + 1, 0, c, c)));
++        m_shadow->setRightTile(tile(QRect(c + 1 + r, c, pad, 1)));
++        m_shadow->setBottomRightTile(tile(QRect(c + 1, c + 1, c, c)));
++        m_shadow->setBottomTile(tile(QRect(c, c + 1 + r, 1, pad)));
++        m_shadow->setBottomLeftTile(tile(QRect(0, c + 1, c, c)));
++        m_shadow->setLeftTile(tile(QRect(0, c, pad, 1)));
++        m_shadow->setPadding(QMargins(pad, pad, pad, pad));
++    }
++    if (m_shadow->isCreated() && m_shadow->window() == handle) {
++        return; // already attached
++    }
++    if (m_shadow->isCreated()) {
++        m_shadow->destroy();
++    }
++    m_shadow->setWindow(handle);
++    m_shadow->create();
++}
++
++#include "moc_SettingsChrome.cpp"
+diff --git a/app/SettingsChrome.h b/app/SettingsChrome.h
+new file mode 100644
+index 00000000..4b55f1ce
+--- /dev/null
++++ b/app/SettingsChrome.h
+@@ -0,0 +1,62 @@
++/*
++    SPDX-FileCopyrightText: 2026 Brhett
++
++    SPDX-License-Identifier: GPL-2.0-or-later
++*/
++
++#pragma once
++
++#include <QObject>
++#include <QPointer>
++#include <QRegion>
++
++class KWindowShadow;
++class QMainWindow;
++class QWidget;
++
++/**
++ * MacSettings: macOS's System Settings window. No title bar: a rounded,
++ * shadowed window whose glass sidebar runs to the top (the stoplights are
++ * drawn by the sidebar's QML), with KWin blurring behind the sidebar.
++ * The window is moved from empty space at the top (SidebarMode::startMove)
++ * and resized from its edges.
++ */
++class SettingsChrome : public QObject
++{
++    Q_OBJECT
++
++public:
++    explicit SettingsChrome(QMainWindow *window);
++    ~SettingsChrome() override;
++
++    /** The sidebar: glass behind it, and the hairline after it. */
++    void setSidebar(QWidget *sidebar);
++
++    bool isMaximized() const;
++    int radius() const;
++
++    /** Translucent tint of the sidebar (KWin blurs behind it). */
++    static QColor sidebarColor();
++    /** The content side's background. */
++    QColor contentColor() const;
++
++Q_SIGNALS:
++    void activeChanged();
++
++protected:
++    bool eventFilter(QObject *watched, QEvent *event) override;
++
++private:
++    Qt::Edges edgesAt(const QPointF &pos) const;
++    void paintBackground();
++    void updateWindowEffects();
++    void updateShadow();
++
++    QMainWindow *m_window;
++    QPointer<QWidget> m_sidebar;
++    KWindowShadow *m_shadow = nullptr;
++    Qt::Edges m_cursorEdges;
++    QRegion m_appliedBlur;
++    bool m_blurApplied = false;
++    bool m_surfaceReady = false;
++};
+diff --git a/app/SidebarMode.cpp b/app/SidebarMode.cpp
+index f901dded..7d651fe2 100644
+--- a/app/SidebarMode.cpp
++++ b/app/SidebarMode.cpp
+@@ -11,10 +11,12 @@
+ #include "MenuModel.h"
+ #include "MenuProxyModel.h"
+ #include "ModuleView.h"
++#include "SettingsChrome.h"
+ #include "kcmmetadatahelpers.h"
+ 
+ #include <KAboutData>
+ #include <KActionCollection>
++#include <KCModuleData>
+ #include <KCModuleLoader>
+ #include <KConfigGroup>
+ #include <KDescendantsProxyModel>
+@@ -34,6 +36,7 @@
+ #include <QQuickItem>
+ #include <QQuickWidget>
+ #include <QStandardPaths>
++#include <QWindow>
+ 
+ FocusHackWidget::FocusHackWidget(QWidget *parent)
+     : QWidget(parent)
+@@ -118,6 +121,17 @@ public:
+     SubcategoryModel *subCategoryModel = nullptr;
+     FocusHackWidget *mainWidget = nullptr;
+     QQuickWidget *placeHolderWidget = nullptr;
++    // MacSettings: a grouped entry's list of pages, shown in place of the
++    // page view.
++    QQuickWidget *landingWidget = nullptr;
++    QVariantMap landing;
++    bool landingShown = false;
++    // The open page was picked from the list (so back goes to it).
++    bool fromLanding = false;
++    // Set while openModule/openFromLanding call loadModule, so loadModule
++    // knows the sidebar didn't go through the search list.
++    bool macNavigating = false;
++    SettingsChrome *chrome = nullptr;
+     QHBoxLayout *mainLayout = nullptr;
+     MenuModel *model = nullptr;
+     MenuProxyModel *categorizedModel = nullptr;
+@@ -299,6 +313,19 @@ void SidebarMode::loadModule(const QModelIndex &activeModule, const QStringList
+         return;
+     }
+ 
++    // MacSettings: a page picked from search leaves any list behind.
++    if (!d->macNavigating && (d->landingShown || d->fromLanding)) {
++        if (d->landingShown && !d->moduleView->resolveChanges()) {
++            return;
++        }
++        d->landingShown = false;
++        d->fromLanding = false;
++        if (d->landingWidget) {
++            d->landingWidget->hide();
++        }
++        Q_EMIT landingChanged();
++    }
++
+     auto mi = activeModule.data(MenuModel::MenuItemRole).value<MenuItem *>();
+ 
+     if (!mi) {
+@@ -319,6 +346,7 @@ void SidebarMode::loadModule(const QModelIndex &activeModule, const QStringList
+     d->moduleView->closeModules();
+ 
+     d->moduleView->loadModule(activeModule, args);
++    Q_EMIT activeModuleIdChanged();
+ 
+     if (activeModule.model() == d->categorizedModel) {
+         const int newCategoryRow = activeModule.row();
+@@ -636,11 +664,29 @@ void SidebarMode::initWidget()
+     });
+ 
+     d->quickWidget->installEventFilter(this);
++    // MacSettings: see-through, over the window's glass.
++    d->quickWidget->setAttribute(Qt::WA_AlwaysStackOnTop);
++    d->quickWidget->setClearColor(Qt::transparent);
+ 
+     d->mainLayout->addWidget(d->quickWidget);
+     d->moduleView->hide();
+     d->mainLayout->addWidget(d->moduleView);
+ 
++    // MacSettings: the list of pages of a grouped sidebar entry, in the
++    // page view's place.
++    d->landingWidget = new QQuickWidget(d->engine.get(), d->mainWidget);
++    d->landingWidget->quickWindow()->setTitle(i18n("Pages"));
++    d->landingWidget->setResizeMode(QQuickWidget::SizeRootObjectToView);
++    d->landingWidget->rootContext()->setContextProperty(QStringLiteral("systemsettings"), this);
++    d->landingWidget->rootContext()->setContextObject(new KLocalizedQmlContext(d->landingWidget));
++    d->landingWidget->setSource(QUrl(QStringLiteral("qrc:/qt/qml/org/kde/systemsettings/LandingPage.qml")));
++    // See-through, so the window's rounded corners show.
++    d->landingWidget->setAttribute(Qt::WA_AlwaysStackOnTop);
++    d->landingWidget->setClearColor(Qt::transparent);
++    d->landingWidget->hide();
++    d->mainLayout->addWidget(d->landingWidget);
++    connect(d->moduleView, &ModuleView::backRequested, this, &SidebarMode::goBack);
++
+     if (!startupModule().isEmpty()) {
+         initPlaceHolderWidget();
+         d->placeHolderWidget->show();
+@@ -772,4 +818,171 @@ void SidebarMode::retranslateQml()
+     d->engine->retranslate();
+ }
+ 
++// MacSettings: pages by plugin id ------------------------------------------
++
++QString SidebarMode::activeModuleId() const
++{
++    if (d->landingShown) {
++        return QString();
++    }
++    return d->moduleView->activeModuleMetadata().pluginId();
++}
++
++QVariantMap SidebarMode::landing() const
++{
++    return d->landing;
++}
++
++bool SidebarMode::landingShown() const
++{
++    return d->landingShown;
++}
++
++bool SidebarMode::canGoBack() const
++{
++    return d->fromLanding && !d->landingShown;
++}
++
++bool SidebarMode::hasModule(const QString &pluginId) const
++{
++    MenuItem *item = rootItem()->descendantForModule(pluginId);
++    return item && (!item->moduleData() || item->moduleData()->isRelevant());
++}
++
++QVariantMap SidebarMode::moduleInfo(const QString &pluginId) const
++{
++    MenuItem *item = rootItem()->descendantForModule(pluginId);
++    if (!item) {
++        return {};
++    }
++    return {
++        {QStringLiteral("name"), item->name()},
++        {QStringLiteral("icon"), item->iconName()},
++        {QStringLiteral("comment"), item->comment()},
++    };
++}
++
++void SidebarMode::openModule(const QString &pluginId)
++{
++    MenuItem *item = rootItem()->descendantForModule(pluginId);
++    if (!item) {
++        return;
++    }
++    if (d->landingShown && !d->moduleView->resolveChanges()) {
++        return;
++    }
++    const bool changed = d->landingShown || d->fromLanding || !d->landing.isEmpty();
++    d->landingShown = false;
++    d->fromLanding = false;
++    d->landing.clear();
++    d->landingWidget->hide();
++    if (changed) {
++        Q_EMIT landingChanged();
++    }
++    d->macNavigating = true;
++    loadModule(d->model->indexForItem(item));
++    d->macNavigating = false;
++    d->moduleView->setBackVisible(false);
++}
++
++void SidebarMode::openLanding(const QVariantMap &entry)
++{
++    if (!d->moduleView->resolveChanges()) {
++        return;
++    }
++    d->moduleView->closeModules();
++    d->landing = entry;
++    d->landingShown = true;
++    d->fromLanding = false;
++    if (d->placeHolderWidget) {
++        d->placeHolderWidget->hide();
++    }
++    d->moduleView->hide();
++    d->landingWidget->show();
++    Q_EMIT landingChanged();
++    Q_EMIT activeModuleIdChanged();
++}
++
++void SidebarMode::openFromLanding(const QString &pluginId)
++{
++    MenuItem *item = rootItem()->descendantForModule(pluginId);
++    if (!item) {
++        return;
++    }
++    d->landingShown = false;
++    d->fromLanding = true;
++    d->landingWidget->hide();
++    d->macNavigating = true;
++    loadModule(d->model->indexForItem(item));
++    d->macNavigating = false;
++    d->moduleView->show();
++    d->moduleView->setBackVisible(true);
++    Q_EMIT landingChanged();
++}
++
++void SidebarMode::goBack()
++{
++    if (!canGoBack() || !d->moduleView->resolveChanges()) {
++        return;
++    }
++    d->moduleView->closeModules();
++    d->moduleView->hide();
++    d->moduleView->setBackVisible(false);
++    d->landingShown = true;
++    d->fromLanding = false;
++    d->landingWidget->show();
++    Q_EMIT landingChanged();
++    Q_EMIT activeModuleIdChanged();
++}
++
++
++// MacSettings: window controls --------------------------------------------
++
++QWidget *SidebarMode::sidebarWidget() const
++{
++    return d->quickWidget;
++}
++
++void SidebarMode::setChrome(SettingsChrome *chrome)
++{
++    d->chrome = chrome;
++    connect(chrome, &SettingsChrome::activeChanged, this, &SidebarMode::windowActiveChanged);
++    Q_EMIT windowActiveChanged();
++}
++
++bool SidebarMode::windowActive() const
++{
++    return d->mainWidget->window()->isActiveWindow();
++}
++
++bool SidebarMode::windowMaximized() const
++{
++    return d->mainWidget->window()->isMaximized();
++}
++
++void SidebarMode::closeWindow()
++{
++    d->mainWidget->window()->close();
++}
++
++void SidebarMode::minimizeWindow()
++{
++    d->mainWidget->window()->showMinimized();
++}
++
++void SidebarMode::toggleMaximized()
++{
++    QWidget *window = d->mainWidget->window();
++    window->isMaximized() ? window->showNormal() : window->showMaximized();
++    Q_EMIT windowActiveChanged();
++}
++
++void SidebarMode::startMove()
++{
++    if (QWindow *handle = d->mainWidget->window()->windowHandle()) {
++        handle->startSystemMove();
++    }
++}
++
++
+ #include "moc_SidebarMode.cpp"
+diff --git a/app/SidebarMode.h b/app/SidebarMode.h
+index 61c58dae..f1771271 100644
+--- a/app/SidebarMode.h
++++ b/app/SidebarMode.h
+@@ -20,6 +20,7 @@ class QAbstractItemView;
+ class QAbstractItemModel;
+ class QAction;
+ class SidebarMode;
++class SettingsChrome;
+ class MenuItem;
+ class KActionCollection;
+ 
+@@ -82,6 +83,18 @@ class SidebarMode : public QObject
+     Q_PROPERTY(qreal headerHeight READ headerHeight WRITE setHeaderHeight NOTIFY headerHeightChanged)
+     // TODO Plasma 6.6 use new Kirigami api instead
+     Q_PROPERTY(qreal devicePixelRatio READ devicePixelRatio NOTIFY devicePixelRatioChanged)
++    // MacSettings: the Mac sidebar picks pages by plugin id rather than by
++    // KDE's category tree. The open page, the grouped entry whose list of
++    // pages is showing (or was, before one of them was opened), and whether
++    // there is a list to go back to.
++    Q_PROPERTY(QString activeModuleId READ activeModuleId NOTIFY activeModuleIdChanged)
++    Q_PROPERTY(QVariantMap landing READ landing NOTIFY landingChanged)
++    Q_PROPERTY(bool landingShown READ landingShown NOTIFY landingChanged)
++    Q_PROPERTY(bool canGoBack READ canGoBack NOTIFY landingChanged)
++    // MacSettings: the window has no title bar; the sidebar draws the
++    // stoplights (grayed while inactive) and moves the window.
++    Q_PROPERTY(bool windowActive READ windowActive NOTIFY windowActiveChanged)
++    Q_PROPERTY(bool windowMaximized READ windowMaximized NOTIFY windowActiveChanged)
+ 
+ public:
+     enum ApplicationMode {
+@@ -140,6 +153,35 @@ public:
+     Q_INVOKABLE void focusNext();
+     Q_INVOKABLE void focusPrevious();
+ 
++    // MacSettings: pages by plugin id.
++    QString activeModuleId() const;
++    QVariantMap landing() const;
++    bool landingShown() const;
++    bool canGoBack() const;
++    /** Whether the page is installed and relevant here (a touchpad page
++     *  without a touchpad isn't). */
++    Q_INVOKABLE bool hasModule(const QString &pluginId) const;
++    /** name, icon, comment */
++    Q_INVOKABLE QVariantMap moduleInfo(const QString &pluginId) const;
++    /** Opens a page straight from the sidebar. */
++    Q_INVOKABLE void openModule(const QString &pluginId);
++    /** Shows a grouped entry's list of pages (`entry` as the sidebar has it:
++     *  key, name, sections). */
++    Q_INVOKABLE void openLanding(const QVariantMap &entry);
++    /** Opens a page from the list; back returns to the list. */
++    Q_INVOKABLE void openFromLanding(const QString &pluginId);
++    Q_INVOKABLE void goBack();
++
++    // MacSettings: window controls.
++    QWidget *sidebarWidget() const;
++    void setChrome(SettingsChrome *chrome);
++    bool windowActive() const;
++    bool windowMaximized() const;
++    Q_INVOKABLE void closeWindow();
++    Q_INVOKABLE void minimizeWindow();
++    Q_INVOKABLE void toggleMaximized();
++    Q_INVOKABLE void startMove();
++
+     void setStartupModule(const QString &startupModule);
+     QString startupModule() const;
+ 
+@@ -166,6 +208,9 @@ private:
+     MenuItem *homeItem() const;
+ 
+ Q_SIGNALS:
++    void activeModuleIdChanged();
++    void landingChanged();
++    void windowActiveChanged();
+     void activeCategoryRowChanged();
+     void activeSubCategoryRowChanged();
+     void activeSearchRowChanged();
+diff --git a/app/qml/Entries.js b/app/qml/Entries.js
+new file mode 100644
+index 00000000..47371e31
+--- /dev/null
++++ b/app/qml/Entries.js
+@@ -0,0 +1,132 @@
++// SPDX-FileCopyrightText: 2026 Brhett
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++// MacSettings: the sidebar, arranged as macOS's System Settings. Each entry
++// is a coloured tile (a white glyph from the icon theme on a macOS colour)
++// and the KDE pages (KCM plugin ids) it covers: one page opens directly;
++// several open a list of them, in sections. Pages that aren't installed or
++// don't apply here are left out, and so are entries left with none.
++
++.pragma library
++
++const blue = "#0a84ff";
++const red = "#ff3b30";
++const pink = "#ff2d55";
++const gray = "#8e8e93";
++const dark = "#3a3a3c";
++const green = "#34c759";
++const cyan = "#32ade6";
++const indigo = "#5e5ce6";
++const orange = "#ff9500";
++
++// Names macOS uses for KDE pages, in lists; others keep KDE's.
++const pageNames = {
++    "kcm_about-distro": "About",
++    "kcm_autostart": "Login Items",
++    "kcm_regionandlang": "Language & Region",
++    "kcm_componentchooser": "Default Apps",
++    "kcm_krdpserver": "Sharing",
++    "kcm_nightlight": "Night Shift",
++    "kcm_kscreen": "Displays",
++    "kcm_keys": "Keyboard Shortcuts",
++    "kcm_plasmasearch": "Spotlight",
++    "kcm_kwinxwayland": "Legacy X11 Apps",
++    "kcm_feedback": "Analytics",
++    "kcm_cursortheme": "Pointers",
++};
++
++// Groups, separated by space in the sidebar as on macOS.
++const groups = [
++    [
++        { key: "wifi", name: "Wi‑Fi", glyph: "network-wireless-symbolic", color: blue, sections: [["kcm_networkmanagement"]] },
++        { key: "bluetooth", name: "Bluetooth", glyph: "bluetooth-symbolic", color: blue, sections: [["kcm_bluetooth"]] },
++        { key: "network", name: "Network", glyph: "globe-symbolic", color: blue, sections: [
++            ["kcm_networkmanagement", "kcm_proxy", "kcm_netpref"],
++        ] },
++    ],
++    [
++        { key: "notifications", name: "Notifications", glyph: "notification-symbolic", color: red, sections: [["kcm_notifications"]] },
++        { key: "sound", name: "Sound", glyph: "audio-volume-high-symbolic", color: pink, sections: [["kcm_pulseaudio"]] },
++    ],
++    [
++        { key: "general", name: "General", glyph: "settings-configure-symbolic", color: gray, sections: [
++            ["kcm_about-distro", "kcm_updates"],
++            ["kcm_autostart", "kcm_regionandlang", "kcm_clock", "kcmspellchecking"],
++            ["kcm_componentchooser", "kcm_filetypes", "kcm_desktoppaths"],
++            ["kcm_krdpserver", "kcm_smserver", "kcm_kded", "kcm_qtquicksettings"],
++        ] },
++        { key: "appearance", name: "Appearance", glyph: "contrast-symbolic", color: dark, sections: [
++            ["kcm_lookandfeel", "kcm_colors", "kcm_style", "kcm_desktoptheme", "kcm_kwindecoration"],
++            ["kcm_icons", "kcm_cursortheme", "kcm_fonts", "kcm_fontinst"],
++            ["kcm_soundtheme", "kcm_splashscreen", "kcm_animations", "kcm_nighttime"],
++        ] },
++        { key: "accessibility", name: "Accessibility", glyph: "preferences-desktop-accessibility-symbolic", color: blue, sections: [["kcm_access"]] },
++        { key: "spotlight", name: "Spotlight", glyph: "system-search-symbolic", color: gray, sections: [
++            ["kcm_plasmasearch", "kcm_baloofile", "kcm_webshortcuts"],
++        ] },
++        { key: "privacy", name: "Privacy & Security", glyph: "hand-symbolic", color: blue, sections: [
++            ["kcm_app-permissions", "kcm_kwinxwayland"],
++            ["kcm_recentFiles", "kcm_feedback"],
++        ] },
++    ],
++    [
++        { key: "desktop", name: "Desktop & Dock", glyph: "dock-symbolic", color: dark, sections: [
++            ["kcm_workspace", "kcm_kwin_virtualdesktops", "kcm_activities", "kcm_kwinscreenedges", "kcm_kwintouchscreen"],
++            ["kcm_kwinoptions", "kcm_kwintabbox", "kcm_kwin_effects", "kcm_kwinrules", "kcm_kwin_scripts"],
++        ] },
++        { key: "displays", name: "Displays", glyph: "display-brightness-symbolic", color: blue, sections: [
++            ["kcm_kscreen", "kcm_nightlight", "kcm_colord"],
++        ] },
++        { key: "wallpaper", name: "Wallpaper", glyph: "preferences-desktop-wallpaper-symbolic", color: cyan, sections: [["kcm_wallpaper"]] },
++        { key: "battery", name: "Battery", glyph: "battery-full-symbolic", color: green, sections: [["kcm_powerdevilprofilesconfig"]] },
++    ],
++    [
++        { key: "lockscreen", name: "Lock Screen", glyph: "system-lock-screen-symbolic", color: dark, sections: [
++            ["kcm_screenlocker", "kcm_plasmalogin"],
++        ] },
++        { key: "users", name: "Users & Groups", glyph: "system-users-symbolic", color: blue, sections: [["kcm_users"]] },
++        { key: "passwords", name: "Passwords", glyph: "password-copy-symbolic", color: gray, sections: [["kcm_kwallet5"]] },
++    ],
++    [
++        { key: "accounts", name: "Internet Accounts", glyph: "mail-message-symbolic", color: blue, sections: [["kcm_kaccounts"]] },
++        { key: "games", name: "Game Controllers", glyph: "input-gaming-symbolic", color: gray, sections: [["kcm_gamecontroller"]] },
++    ],
++    [
++        { key: "keyboard", name: "Keyboard", glyph: "input-keyboard-symbolic", color: gray, sections: [
++            ["kcm_keyboard", "kcm_keys"],
++            ["kcm_virtualkeyboard", "kcm_plasmakeyboard"],
++        ] },
++        { key: "mouse", name: "Mouse", glyph: "input-mouse-symbolic", color: gray, sections: [["kcm_mouse"]] },
++        { key: "trackpad", name: "Trackpad", glyph: "input-touchpad-symbolic", color: gray, sections: [["kcm_touchpad"]] },
++        { key: "printers", name: "Printers & Scanners", glyph: "printer-symbolic", color: gray, sections: [["kcm_printer_manager"]] },
++    ],
++    [
++        { key: "tablet", name: "Drawing Tablet", glyph: "input-tablet-symbolic", color: indigo, sections: [["kcm_tablet"]] },
++        { key: "touchscreen", name: "Touchscreen", glyph: "input-tablet-symbolic", color: indigo, sections: [["kcm_touchscreen"]] },
++        { key: "thunderbolt", name: "Thunderbolt", glyph: "emblem-system-symbolic", color: orange, sections: [["kcm_bolt"]] },
++        { key: "disks", name: "Disks & Cameras", glyph: "drive-removable-media-symbolic", color: orange, sections: [
++            ["kcm_device_automounter", "kcm_solid_actions", "kcm_kamera"],
++        ] },
++        { key: "audiocd", name: "Audio CDs", glyph: "media-optical-symbolic", color: orange, sections: [["kcm_audiocd", "kcm_cddb"]] },
++    ],
++];
++
++// `has(id)` tells whether a page is available. Returns the groups with
++// unavailable pages, empty sections and empty entries removed; each entry
++// gains `group` (its group's number) and `modules` (all its pages).
++function available(has) {
++    const result = [];
++    groups.forEach((group, g) => {
++        for (const entry of group) {
++            const sections = entry.sections
++                .map(section => section.filter(id => has(id)))
++                .filter(section => section.length > 0);
++            if (sections.length === 0) {
++                continue;
++            }
++            const modules = [].concat(...sections);
++            result.push(Object.assign({}, entry, { group: g, sections: sections, modules: modules }));
++        }
++    });
++    return result;
++}
+diff --git a/app/qml/LandingPage.qml b/app/qml/LandingPage.qml
+new file mode 100644
+index 00000000..9373b4f9
+--- /dev/null
++++ b/app/qml/LandingPage.qml
+@@ -0,0 +1,153 @@
++// SPDX-FileCopyrightText: 2026 Brhett
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++pragma ComponentBehavior: Bound
++
++import QtQuick
++import QtQuick.Controls as QQC2
++import QtQuick.Layouts
++import org.kde.kirigami as Kirigami
++
++// MacSettings: the page of a sidebar entry that covers several KDE pages
++// (General, Appearance…): their names in rounded groups, as macOS lists a
++// pane's sub-pages. Clicking one opens it, with ‹ back to this list.
++Rectangle {
++    id: page
++
++    readonly property var entry: systemsettings.landing
++    readonly property int contentWidth: Math.min(width - Kirigami.Units.gridUnit * 3, Kirigami.Units.gridUnit * 34)
++
++    function pageName(id) {
++        const names = entry.pageNames || {};
++        return names[id] || systemsettings.moduleInfo(id).name || id;
++    }
++
++    Kirigami.Theme.colorSet: Kirigami.Theme.View
++    Kirigami.Theme.inherit: false
++    // The window paints the background (with its rounded corners).
++    color: "transparent"
++
++
++    QQC2.ScrollView {
++        anchors.fill: parent
++        QQC2.ScrollBar.horizontal.policy: QQC2.ScrollBar.AlwaysOff
++
++        Flickable {
++            contentWidth: width
++            contentHeight: column.implicitHeight + Kirigami.Units.gridUnit * 2
++
++            ColumnLayout {
++                id: column
++                x: Math.round((parent.width - page.contentWidth) / 2)
++                y: Kirigami.Units.gridUnit * 2.5
++                width: page.contentWidth
++                spacing: Kirigami.Units.gridUnit
++
++                RowLayout {
++                    spacing: Kirigami.Units.largeSpacing
++
++                    MacTile {
++                        glyph: page.entry.glyph || ""
++                        tint: page.entry.color || "#8e8e93"
++                        size: 34
++                    }
++                    Kirigami.Heading {
++                        text: page.entry.name || ""
++                        level: 1
++                        font.weight: Font.Bold
++                    }
++                }
++
++                Repeater {
++                    model: page.entry.sections || []
++
++                    // One rounded group of rows with hairlines between them.
++                    delegate: Rectangle {
++                        id: group
++                        required property var modelData
++                        Layout.fillWidth: true
++                        implicitHeight: rows.implicitHeight
++                        radius: 10
++                        color: Kirigami.ColorUtils.linearInterpolation(Kirigami.Theme.backgroundColor, Kirigami.Theme.textColor, 0.05)
++                        border.width: 1
++                        border.color: Kirigami.ColorUtils.linearInterpolation(Kirigami.Theme.backgroundColor, Kirigami.Theme.textColor, 0.09)
++
++                        ColumnLayout {
++                            id: rows
++                            anchors.left: parent.left
++                            anchors.right: parent.right
++                            spacing: 0
++
++                            Repeater {
++                                model: group.modelData
++                                delegate: MouseArea {
++                                    id: row
++                                    required property string modelData
++                                    required property int index
++                                    readonly property var info: systemsettings.moduleInfo(modelData)
++                                    Layout.fillWidth: true
++                                    implicitHeight: Kirigami.Units.gridUnit * 2.2
++                                    hoverEnabled: true
++                                    cursorShape: Qt.PointingHandCursor
++                                    Accessible.role: Accessible.Button
++                                    Accessible.name: page.pageName(modelData)
++                                    onClicked: systemsettings.openFromLanding(modelData)
++
++                                    Rectangle {
++                                        anchors.fill: parent
++                                        anchors.margins: 1
++                                        radius: 9
++                                        color: Kirigami.Theme.textColor
++                                        opacity: row.pressed ? 0.1 : row.containsMouse ? 0.05 : 0
++                                    }
++                                    // Hairline above every row but the first,
++                                    // indented past the icon as on macOS.
++                                    Rectangle {
++                                        visible: row.index > 0
++                                        x: Kirigami.Units.largeSpacing * 2 + 24
++                                        width: parent.width - x
++                                        height: 1
++                                        color: Kirigami.ColorUtils.linearInterpolation(Kirigami.Theme.backgroundColor, Kirigami.Theme.textColor, 0.1)
++                                    }
++
++                                    RowLayout {
++                                        anchors.fill: parent
++                                        anchors.leftMargin: Kirigami.Units.largeSpacing
++                                        anchors.rightMargin: Kirigami.Units.largeSpacing
++                                        spacing: Kirigami.Units.largeSpacing
++
++                                        Kirigami.Icon {
++                                            Layout.preferredWidth: 24
++                                            Layout.preferredHeight: 24
++                                            source: row.info.icon || ""
++                                        }
++                                        QQC2.Label {
++                                            Layout.fillWidth: true
++                                            text: page.pageName(row.modelData)
++                                            elide: Text.ElideRight
++                                        }
++                                        Kirigami.Icon {
++                                            Layout.preferredWidth: 14
++                                            Layout.preferredHeight: 14
++                                            source: "go-next-symbolic"
++                                            opacity: 0.45
++                                        }
++                                    }
++                                }
++                            }
++                        }
++                    }
++                }
++            }
++        }
++    }
++
++    // No title bar: the strip above the content moves the window.
++    MouseArea {
++        anchors.left: parent.left
++        anchors.right: parent.right
++        height: Kirigami.Units.gridUnit * 2.5
++        onPressed: systemsettings.startMove()
++        onDoubleClicked: systemsettings.toggleMaximized()
++    }
++}
+diff --git a/app/qml/MacTile.qml b/app/qml/MacTile.qml
+new file mode 100644
+index 00000000..1930e348
+--- /dev/null
++++ b/app/qml/MacTile.qml
+@@ -0,0 +1,34 @@
++// SPDX-FileCopyrightText: 2026 Brhett
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++import QtQuick
++import org.kde.kirigami as Kirigami
++
++// MacSettings: a macOS System Settings icon: a white glyph on a rounded tile
++// of colour, a little lighter at the top.
++Rectangle {
++    id: tile
++
++    property string glyph
++    property color tint: "#8e8e93"
++    property int size: 22
++
++    width: size
++    height: size
++    radius: Math.round(size * 0.25)
++    gradient: Gradient {
++        GradientStop { position: 0; color: Qt.lighter(tile.tint, 1.12) }
++        GradientStop { position: 1; color: tile.tint }
++    }
++    border.width: 1
++    border.color: Qt.rgba(1, 1, 1, 0.08)
++
++    Kirigami.Icon {
++        anchors.centerIn: parent
++        width: Math.round(tile.size * 0.68)
++        height: width
++        source: tile.glyph
++        isMask: true
++        color: "white"
++    }
++}
+diff --git a/app/qml/Main.qml b/app/qml/Main.qml
+index 8bba6183..5d6338d1 100644
+--- a/app/qml/Main.qml
++++ b/app/qml/Main.qml
+@@ -1,70 +1,388 @@
+ /*
+    SPDX-FileCopyrightText: 2017 Marco Martin <mart@kde.org>
+    SPDX-FileCopyrightText: 2023 ivan tkachenko <me@ratijas.tk>
++   SPDX-FileCopyrightText: 2026 Brhett
+ 
+    SPDX-License-Identifier: LGPL-2.0-only
+ */
+ 
+-import QtQuick 2.15
++pragma ComponentBehavior: Bound
+ 
+-import org.kde.kirigami 2.20 as Kirigami
++import QtQuick
++import QtQuick.Controls as QQC2
++import QtQuick.Layouts
++import org.kde.kirigami as Kirigami
++import org.kde.coreaddons as KCoreAddons
++import org.kde.kirigamiaddons.components as KirigamiComponents
+ 
++import "Entries.js" as Entries
++
++// MacSettings: the sidebar, as macOS's System Settings: a search field, the
++// user's account, then groups of entries with coloured tiles. An entry with
++// one page opens it; one with several shows their list (LandingPage.qml).
++// Typing searches KDE's pages by name and keyword.
+ Item {
+     id: root
+ 
+     // properties, signals and methods used by C++ backend
++    readonly property real headerHeight: Kirigami.Units.gridUnit * 2 + Kirigami.Units.largeSpacing
++
++    readonly property var entries: Entries.available(id => systemsettings.hasModule(id))
++    readonly property bool searching: searchField.text.length > 0
++    // The entry last picked; follows the open page when it changes
++    // otherwise (search, a link from another page).
++    property string selectedKey: ""
++    // Keep the selected entry in view (a page opened from search or another
++    // app may be further down).
++    onSelectedKeyChanged: {
++        const i = entries.findIndex(e => e.key === selectedKey);
++        if (i >= 0) {
++            list.positionViewAtIndex(i, ListView.Contain);
++        }
++    }
++
++    function entryFor(moduleId) {
++        if (moduleId === "") {
++            return null;
++        }
++        const current = entries.find(e => e.key === selectedKey);
++        if (current && current.modules.indexOf(moduleId) >= 0) {
++            return current;
++        }
++        return entries.find(e => e.modules.indexOf(moduleId) >= 0) || null;
++    }
+ 
+-    readonly property real headerHeight: sideBar.headerHeight
++    function open(entry) {
++        selectedKey = entry.key;
++        if (entry.modules.length === 1) {
++            systemsettings.openModule(entry.modules[0]);
++        } else {
++            systemsettings.openLanding({
++                key: entry.key,
++                name: entry.name,
++                glyph: entry.glyph,
++                color: entry.color,
++                sections: entry.sections,
++                pageNames: Entries.pageNames
++            });
++        }
++    }
+ 
+-    implicitHeight: sideBar.implicitHeight
+-    implicitWidth: sideBar.implicitWidth + separator.implicitWidth
++    implicitWidth: Kirigami.Units.gridUnit * 14
++    implicitHeight: Kirigami.Units.gridUnit * 30
+ 
+     LayoutMirroring.enabled: Qt.application.layoutDirection === Qt.RightToLeft
+     LayoutMirroring.childrenInherit: true
+ 
+-    // This is the background of the missing part of the sidebar's header
+-    Rectangle {
+-        anchors {
+-            top: parent.top
+-            right: parent.right
++    Kirigami.Theme.colorSet: Kirigami.Theme.Window
++    Kirigami.Theme.inherit: false
++
++    Connections {
++        target: systemsettings
++        function onActiveModuleIdChanged() {
++            if (!systemsettings.landingShown) {
++                const entry = root.entryFor(systemsettings.activeModuleId);
++                if (entry) {
++                    root.selectedKey = entry.key;
++                } else if (systemsettings.activeModuleId === "kcm_users") {
++                    root.selectedKey = "account";
++                }
++            }
++        }
++    }
++
++    // Start on General, as macOS does, unless a page was asked for.
++    Timer {
++        running: true
++        interval: 0
++        onTriggered: {
++            const id = systemsettings.activeModuleId;
++            if (id === "" || id === "kcm_landingpage") {
++                const general = root.entries.find(e => e.key === "general");
++                if (general) {
++                    root.open(general);
++                }
++            }
+         }
+-        Kirigami.Theme.inherit: false
+-        Kirigami.Theme.colorSet: Kirigami.Theme.Header
+-        color: Kirigami.Theme.backgroundColor
+-        width: separator.width
+-        height: sideBar.pageStack.currentItem?.header.height
+     }
+ 
+-    SideBarItem {
+-        id: sideBar
++    // macOS's sidebar selection (the accent blue, as in the Mac menus).
++    readonly property color selectionColor: "#315bef"
+ 
++    // The window has no title bar (SettingsChrome paints the glass behind
++    // this sidebar): empty space at the top moves it, double-click zooms.
++    MouseArea {
+         anchors.fill: parent
+-        anchors.rightMargin: separator.width
++        acceptedButtons: Qt.LeftButton
++        onPressed: systemsettings.startMove()
++        onDoubleClicked: systemsettings.toggleMaximized()
+     }
+ 
+-    Kirigami.Separator {
+-        z: 1
+-        anchors {
+-            top: parent.top
+-            topMargin: Kirigami.Units.largeSpacing
+-            right: parent.right
++    ColumnLayout {
++        anchors.fill: parent
++        anchors.rightMargin: 1
++        spacing: 0
++
++        Stoplights {
++            Layout.leftMargin: Kirigami.Units.largeSpacing + 2
++            Layout.topMargin: Kirigami.Units.largeSpacing + 4
++        }
++
++        Kirigami.SearchField {
++            id: searchField
++            Layout.fillWidth: true
++            Layout.margins: Kirigami.Units.largeSpacing
++            Layout.topMargin: Kirigami.Units.largeSpacing + 2
++            Layout.bottomMargin: Kirigami.Units.smallSpacing
++            focus: !Kirigami.InputMethod.willShowOnActive
++            onTextChanged: systemsettings.searchModel.filterRegExp = text
++            KeyNavigation.down: searching ? results : list
++        }
++
++        // ---- the sidebar ----------------------------------------------------
++        QQC2.ScrollView {
++            Layout.fillWidth: true
++            Layout.fillHeight: true
++            visible: !root.searching
++            QQC2.ScrollBar.horizontal.policy: QQC2.ScrollBar.AlwaysOff
++            QQC2.ScrollBar.vertical: ThinScrollBar {}
++
++            ListView {
++                id: list
++                clip: true
++                model: root.entries
++                keyNavigationEnabled: true
++                topMargin: Kirigami.Units.smallSpacing
++                bottomMargin: Kirigami.Units.largeSpacing
++
++                header: SidebarRow {
++                    id: account
++                    width: ListView.view.width
++                    height: Kirigami.Units.gridUnit * 3
++                    selected: root.selectedKey === "account"
++                    visible: systemsettings.hasModule("kcm_users")
++                    onClicked: {
++                        root.selectedKey = "account";
++                        systemsettings.openModule("kcm_users");
++                    }
++
++                    KCoreAddons.KUser {
++                        id: user
++                    }
++
++                    RowLayout {
++                        anchors.fill: parent
++                        anchors.leftMargin: Kirigami.Units.largeSpacing
++                        anchors.rightMargin: Kirigami.Units.largeSpacing
++                        spacing: Kirigami.Units.largeSpacing
++
++                        KirigamiComponents.Avatar {
++                            Layout.preferredWidth: Kirigami.Units.gridUnit * 2
++                            Layout.preferredHeight: Layout.preferredWidth
++                            source: user.faceIconUrl
++                            name: user.fullName || user.loginName
++                        }
++                        ColumnLayout {
++                            Layout.fillWidth: true
++                            spacing: 0
++                            QQC2.Label {
++                                Layout.fillWidth: true
++                                text: user.fullName || user.loginName
++                                font.weight: Font.DemiBold
++                                elide: Text.ElideRight
++                                color: account.selected ? "white" : Kirigami.Theme.textColor
++                            }
++                            QQC2.Label {
++                                Layout.fillWidth: true
++                                text: i18nc("@label under the user's name in the sidebar", "Account")
++                                font: Kirigami.Theme.smallFont
++                                elide: Text.ElideRight
++                                opacity: 0.7
++                                color: account.selected ? "white" : Kirigami.Theme.textColor
++                            }
++                        }
++                    }
++                }
++
++                delegate: Item {
++                    id: slot
++                    required property int index
++                    required property var modelData
++                    // macOS separates groups with space, no headings.
++                    readonly property bool firstOfGroup: index > 0 && root.entries[index - 1].group !== modelData.group
++                    width: ListView.view.width
++                    height: row.implicitHeight + (firstOfGroup ? Kirigami.Units.largeSpacing * 1.5 : 0)
++
++                    SidebarRow {
++                        id: row
++                        readonly property var modelData: slot.modelData
++                        anchors.bottom: parent.bottom
++                        width: parent.width
++                        height: implicitHeight
++                        selected: root.selectedKey === modelData.key
++                        onClicked: root.open(modelData)
++
++                        RowLayout {
++                            anchors.fill: parent
++                            anchors.leftMargin: Kirigami.Units.largeSpacing
++                            anchors.rightMargin: Kirigami.Units.largeSpacing
++                            spacing: Kirigami.Units.mediumSpacing
++
++                            MacTile {
++                                glyph: row.modelData.glyph
++                                tint: row.modelData.color
++                            }
++                            QQC2.Label {
++                                Layout.fillWidth: true
++                                text: row.modelData.name
++                                elide: Text.ElideRight
++                                color: row.selected ? "white" : Kirigami.Theme.textColor
++                            }
++                        }
++                    }
++                }
++            }
++        }
++
++        // ---- search results -------------------------------------------------
++        QQC2.ScrollView {
++            Layout.fillWidth: true
++            Layout.fillHeight: true
++            visible: root.searching
++            QQC2.ScrollBar.horizontal.policy: QQC2.ScrollBar.AlwaysOff
++            QQC2.ScrollBar.vertical: ThinScrollBar {}
++
++            ListView {
++                id: results
++                clip: true
++                model: root.searching ? systemsettings.searchModel : null
++                topMargin: Kirigami.Units.smallSpacing
++
++                delegate: SidebarRow {
++                    id: result
++                    required property int index
++                    required property var model
++                    required property bool isKCM
++                    required property string iconName
++                    width: ListView.view.width
++                    height: isKCM ? implicitHeight : 0
++                    visible: isKCM
++                    selected: systemsettings.activeModuleId !== "" && ListView.isCurrentItem
++                    onClicked: {
++                        ListView.view.currentIndex = index;
++                        systemsettings.loadModule(ListView.view.model.index(index, 0));
++                    }
++
++                    RowLayout {
++                        anchors.fill: parent
++                        anchors.leftMargin: Kirigami.Units.largeSpacing
++                        anchors.rightMargin: Kirigami.Units.largeSpacing
++                        spacing: Kirigami.Units.mediumSpacing
++
++                        Kirigami.Icon {
++                            Layout.preferredWidth: 22
++                            Layout.preferredHeight: 22
++                            source: result.iconName
++                        }
++                        QQC2.Label {
++                            Layout.fillWidth: true
++                            text: result.model.display
++                            elide: Text.ElideRight
++                            color: result.selected ? "white" : Kirigami.Theme.textColor
++                        }
++                    }
++                }
++
++                Kirigami.PlaceholderMessage {
++                    anchors.centerIn: parent
++                    width: parent.width - Kirigami.Units.gridUnit * 2
++                    visible: root.searching && results.count === 0
++                    text: i18nc("A search yielded no results", "No Results")
++                }
++            }
+         }
+-        height: sideBar.pageStack.currentItem?.header.height - Kirigami.Units.largeSpacing * 2
+-        Kirigami.Theme.inherit: false
+-        Kirigami.Theme.colorSet: Kirigami.Theme.Header
+     }
+ 
+-    Kirigami.Separator {
+-        id: separator
+-        z: 1
+-        anchors {
+-            top: parent.top
+-            topMargin: sideBar.pageStack.currentItem?.header.height - Math.round(separator.width * systemsettings.devicePixelRatio) / systemsettings.devicePixelRatio
+-            right: parent.right
+-            bottom: parent.bottom
++    // One sidebar row: macOS's rounded selection in the accent colour.
++    component SidebarRow: MouseArea {
++        id: sidebarRow
++
++        property bool selected: false
++
++        implicitHeight: Kirigami.Units.gridUnit * 1.75
++        hoverEnabled: true
++        Accessible.role: Accessible.ListItem
++
++        Rectangle {
++            anchors.fill: parent
++            anchors.leftMargin: Kirigami.Units.smallSpacing * 2
++            anchors.rightMargin: Kirigami.Units.smallSpacing * 2
++            radius: 6
++            color: sidebarRow.selected ? root.selectionColor
++                 : sidebarRow.containsMouse ? Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g, Kirigami.Theme.textColor.b, 0.07)
++                 : "transparent"
+         }
++    }
++    // macOS's overlay scrollbar: a thin rounded thumb while scrolling.
++    component ThinScrollBar: QQC2.ScrollBar {
++        id: bar
++        width: 8
++        policy: QQC2.ScrollBar.AsNeeded
++        background: null
++        contentItem: Rectangle {
++            implicitWidth: 6
++            radius: 3
++            color: Kirigami.Theme.textColor
++            opacity: bar.active ? (bar.hovered || bar.pressed ? 0.45 : 0.3) : 0
++            Behavior on opacity {
++                NumberAnimation { duration: 250 }
++            }
++        }
++    }
+ 
+-        Kirigami.Theme.inherit: false
+-        Kirigami.Theme.colorSet: Kirigami.Theme.Header
++    // The window's close, minimize and zoom buttons, as on macOS: glyphs on
++    // hover, gray while the window is inactive.
++    component Stoplights: Row {
++        id: lights
++        spacing: 8
++        readonly property bool lit: systemsettings.windowActive || lightsHover.hovered
++
++        HoverHandler {
++            id: lightsHover
++        }
++
++        Repeater {
++            model: [
++                { color: "#ff5f57", glyph: "×", action: () => systemsettings.closeWindow() },
++                { color: "#febc2e", glyph: "−", action: () => systemsettings.minimizeWindow() },
++                { color: "#28c840", glyph: "+", action: () => systemsettings.toggleMaximized() }
++            ]
++            delegate: Rectangle {
++                id: light
++                required property var modelData
++                width: 12
++                height: 12
++                radius: 6
++                color: !lights.lit ? "#505054" : lightMouse.pressed ? Qt.darker(modelData.color, 1.25) : modelData.color
++                border.width: 0.5
++                border.color: Qt.rgba(0, 0, 0, 0.2)
++
++                Text {
++                    anchors.centerIn: parent
++                    anchors.verticalCenterOffset: -0.5
++                    visible: lightsHover.hovered
++                    text: light.modelData.glyph
++                    color: Qt.rgba(0, 0, 0, 0.6)
++                    font.pixelSize: 11
++                    font.bold: true
++                }
++                MouseArea {
++                    id: lightMouse
++                    anchors.fill: parent
++                    anchors.margins: -3
++                    onClicked: light.modelData.action()
++                }
++            }
++        }
+     }
+ }
+-- 
+2.56.0
+

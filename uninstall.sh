@@ -13,6 +13,8 @@ rm -rf "$data/plasma/desktoptheme/MacGlass" \
        "$data/fonts/MacGlass" \
        "$data/plasma/shells/org.brhett.goldengate" \
        "$HOME/.local/opt/finder" \
+       "$HOME/.local/opt/settings" \
+       "${XDG_CACHE_HOME:-$HOME/.cache}/mac-glass-kde/settings-src" \
        "${XDG_CACHE_HOME:-$HOME/.cache}/mac-glass-kde/finder-src" \
        "$data"/plasma/plasmoids/org.brhett.{activeapp,applemenu,menubar,controlcenter,macbattery,macclipboard,macdock,macnotifications,macnowplaying,macsound,macwifi}
 rm -f "$config/systemd/user/plasma-kwin_wayland.service.d/goldengate-lockscreen.conf" \
@@ -33,6 +35,8 @@ if [ "$(kreadconfig6 --group KDE --key widgetStyle 2>/dev/null)" = MacGlass ]; t
     kwriteconfig6 --group KDE --key widgetStyle Breeze
 fi
 # Finder's file chooser: hand Open/Save dialogs back to KDE.
+# Mac Settings: only our wrapper (the stock app lives in /usr/bin).
+grep -q "Mac Settings" "$HOME/.local/bin/systemsettings" 2>/dev/null && rm -f "$HOME/.local/bin/systemsettings"
 rm -f "$data/dbus-1/services/org.freedesktop.impl.portal.desktop.finder.service"
 sed -i '/^org.freedesktop.impl.portal.FileChooser=finder/d' "$config/xdg-desktop-portal/kde-portals.conf" 2>/dev/null || true
 systemctl --user restart xdg-desktop-portal.service 2>/dev/null || true
