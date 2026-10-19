@@ -1,0 +1,46 @@
+From 4011a339b4a5e6f48dfd5b11247c8ec7f1ba4168 Mon Sep 17 00:00:00 2001
+From: jingledingle521 <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 21:17:15 -0500
+Subject: [PATCH 10/10] Mac Settings: Stoplights back to the window decorations
+ size
+
+14.5 px circles 8.8 px apart, as every other window (the 16 px ones read
+as too big next to them). The lift and the drawn glyphs stay.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ app/qml/Main.qml | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/app/qml/Main.qml b/app/qml/Main.qml
+index e6213920..e759189d 100644
+--- a/app/qml/Main.qml
++++ b/app/qml/Main.qml
+@@ -351,11 +351,11 @@ Item {
+ 
+     // The window's close, minimize and zoom buttons, as on macOS: glyphs on
+     // hover, gray while the window is inactive.
+-    // A little larger than the window decorations' (MacSequoia draws ~22 px
+-    // circles 35 px apart at 1.5×); the user preferred them bigger.
++    // Sized like the window decorations' (MacSequoia draws ~22 px
++    // circles 35 px apart at 1.5×), so all windows' stoplights match.
+     component Stoplights: Row {
+         id: lights
+-        spacing: 8
++        spacing: 8.8
+         readonly property bool lit: systemsettings.windowActive || lightsHover.hovered
+ 
+         HoverHandler {
+@@ -371,7 +371,7 @@ Item {
+             delegate: Rectangle {
+                 id: light
+                 required property var modelData
+-                width: 16
++                width: 14.5
+                 height: width
+                 radius: width / 2
+                 color: !lights.lit ? "#505054" : lightMouse.pressed ? Qt.darker(modelData.color, 1.25) : modelData.color
+-- 
+2.56.0
+

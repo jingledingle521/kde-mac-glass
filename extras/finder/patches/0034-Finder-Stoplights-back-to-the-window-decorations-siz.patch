@@ -1,0 +1,36 @@
+From 5f8f41379c73d2bea802ff08aabd7aa8e452b59a Mon Sep 17 00:00:00 2001
+From: Brhett <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 21:17:16 -0500
+Subject: [PATCH 34/34] Finder: Stoplights back to the window decorations size
+
+14.5 px circles 8.8 px apart, as every other window (the 16 px ones read
+as too big next to them). The lift and the drawn glyphs stay.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ src/finder/finderchrome.cpp | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/src/finder/finderchrome.cpp b/src/finder/finderchrome.cpp
+index 47dc8bed0..970765b0d 100644
+--- a/src/finder/finderchrome.cpp
++++ b/src/finder/finderchrome.cpp
+@@ -139,10 +139,10 @@ public:
+     }
+ 
+ protected:
+-    // A little larger than the window decorations' (MacSequoia draws ~22 px
+-    // circles 35 px apart at 1.5×); the user preferred them bigger.
+-    static constexpr qreal Diameter = 16;
+-    static constexpr qreal Gap = 8;
++    // Sized like the window decorations' (MacSequoia draws ~22 px
++    // circles 35 px apart at 1.5×), so all windows' stoplights match.
++    static constexpr qreal Diameter = 14.5;
++    static constexpr qreal Gap = 8.8;
+     static constexpr int LeftMargin = 8;
+     static constexpr int RightMargin = 14;
+ 
+-- 
+2.56.0
+
