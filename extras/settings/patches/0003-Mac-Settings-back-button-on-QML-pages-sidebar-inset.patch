@@ -1,0 +1,249 @@
+From 77c7fef6f9943bbd4ebf619e2641becbbe3e37fb Mon Sep 17 00:00:00 2001
+From: jingledingle521 <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 20:48:09 -0500
+Subject: [PATCH 3/3] Mac Settings: back button on QML pages; sidebar inset
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The ‹ for pages opened from a list now lives inside QML pages' own
+headers (a widget over the page was hidden under it), and hides when a
+page is opened any other way. Sidebar rows start further in from their
+selection. MAC_TEST_BACK=<page> opens General's list and then that page,
+for checking the button without clicking.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ app/CMakeLists.txt        |  1 +
+ app/ModuleView.cpp        | 41 +++++++++++++++++++++++++++++++++++++--
+ app/ModuleView.h          |  2 ++
+ app/SidebarMode.cpp       | 13 +++++++++++++
+ app/qml/MacBackButton.qml | 25 ++++++++++++++++++++++++
+ app/qml/Main.qml          | 14 +++++++------
+ 6 files changed, 88 insertions(+), 8 deletions(-)
+ create mode 100644 app/qml/MacBackButton.qml
+
+diff --git a/app/CMakeLists.txt b/app/CMakeLists.txt
+index bf1d326c..8a3f1c00 100644
+--- a/app/CMakeLists.txt
++++ b/app/CMakeLists.txt
+@@ -32,6 +32,7 @@ ecm_target_qml_sources(systemsettings SOURCES
+     qml/HamburgerMenuButton.qml
+     qml/IntroPage.qml
+     qml/LandingPage.qml
++    qml/MacBackButton.qml
+     qml/MacFormPanels.qml
+     qml/MacTile.qml
+     qml/Main.qml
+diff --git a/app/ModuleView.cpp b/app/ModuleView.cpp
+index fd612a37..3217444d 100644
+--- a/app/ModuleView.cpp
++++ b/app/ModuleView.cpp
+@@ -14,6 +14,8 @@
+ #include <QDialogButtonBox>
+ #include <QHBoxLayout>
+ #include <QToolButton>
++#include <QPointer>
++#include <QHash>
+ #include <QQmlEngine>
+ #include <QQmlContext>
+ #include <QQmlComponent>
+@@ -141,6 +143,9 @@ public:
+     bool backVisible = false;
+     // MacSettings: macOS's grouped forms for the pages' FormLayouts.
+     std::unique_ptr<QQmlComponent> formPanels;
++    // The ‹ inside each QML page's header.
++    std::unique_ptr<QQmlComponent> backComponent;
++    QHash<QQuickItem *, QPointer<QQuickItem>> qmlBack;
+     QPushButton *mReset = nullptr;
+     QPushButton *mDefault = nullptr;
+     QPushButton *mHelp = nullptr;
+@@ -749,8 +754,11 @@ void ModuleView::updateBackButton()
+ {
+     const bool visible = d->backVisible;
+     const int room = visible ? BackRoom : 0;
+-    d->mBack->setVisible(visible);
+-    if (visible) {
++    KCModule *current = d->mPages.value(d->mPageWidget->currentPage());
++    const bool qmlPage = current && current->inherits("KCModuleQml");
++    // On QML pages the ‹ lives in the page's own header (see below).
++    d->mBack->setVisible(visible && !qmlPage);
++    if (visible && !qmlPage) {
+         // Centred on the page's header: the QML header or our title row.
+         const int headerHeight = d->mCustomHeader->isVisible() ? d->mCustomHeader->height() : 46;
+         d->mBack->move(8, TopGap + (headerHeight - d->mBack->sizeHint().height()) / 2);
+@@ -776,6 +784,30 @@ void ModuleView::updateBackButton()
+             if (QObject *root = quick->rootObject()) {
+                 auto pageStack = root->property("pageStack").value<QObject *>();
+                 auto toolBar = pageStack ? pageStack->property("globalToolBar").value<QObject *>() : nullptr;
++                if (auto rootItem = qobject_cast<QQuickItem *>(root)) {
++                    QQuickItem *back = d->qmlBack.value(rootItem);
++                    if (!back && visible) {
++                        if (!d->backComponent) {
++                            d->backComponent = std::make_unique<QQmlComponent>(d->engine.get(), QUrl(QStringLiteral("qrc:/qt/qml/org/kde/systemsettings/MacBackButton.qml")));
++                        }
++                        QQmlContext *context = QQmlEngine::contextForObject(rootItem);
++                        back = qobject_cast<QQuickItem *>(d->backComponent->createWithInitialProperties({{QStringLiteral("view"), QVariant::fromValue<QObject *>(this)}},
++                                                                                                         context ? context : d->engine->rootContext()));
++                        if (back) {
++                            back->setParentItem(rootItem);
++                            back->setParent(rootItem);
++                            d->qmlBack.insert(rootItem, back);
++                        } else {
++                            qWarning() << "MacSettings: back button" << d->backComponent->errors();
++                        }
++                    }
++                    if (back) {
++                        back->setVisible(visible);
++                        if (toolBar) {
++                            back->setProperty("headerHeight", toolBar->property("preferredHeight"));
++                        }
++                    }
++                }
+                 if (toolBar) {
+                     // Kirigami's default is one grid unit (18 px).
+                     toolBar->setProperty("titleLeftPadding", 18 + room);
+@@ -815,6 +847,11 @@ void ModuleView::updateBackButton()
+     }
+ }
+ 
++void ModuleView::requestBack()
++{
++    Q_EMIT backRequested();
++}
++
+ void ModuleView::scheduleBackButtonUpdate()
+ {
+     QTimer::singleShot(0, this, &ModuleView::updateBackButton);
+diff --git a/app/ModuleView.h b/app/ModuleView.h
+index 6e761df3..4c3058e5 100644
+--- a/app/ModuleView.h
++++ b/app/ModuleView.h
+@@ -136,6 +136,8 @@ public:
+     /** MacSettings: shows the ‹ button that goes back to the list of pages
+      *  this one was opened from. */
+     void setBackVisible(bool visible);
++    /** MacSettings: the ‹ inside a QML page's header was clicked. */
++    Q_INVOKABLE void requestBack();
+ 
+ protected:
+     void mousePressEvent(QMouseEvent *event) override;
+diff --git a/app/SidebarMode.cpp b/app/SidebarMode.cpp
+index 7d651fe2..78fe34b4 100644
+--- a/app/SidebarMode.cpp
++++ b/app/SidebarMode.cpp
+@@ -37,6 +37,7 @@
+ #include <QQuickWidget>
+ #include <QStandardPaths>
+ #include <QWindow>
++#include <QTimer>
+ 
+ FocusHackWidget::FocusHackWidget(QWidget *parent)
+     : QWidget(parent)
+@@ -323,6 +324,8 @@ void SidebarMode::loadModule(const QModelIndex &activeModule, const QStringList
+         if (d->landingWidget) {
+             d->landingWidget->hide();
+         }
++        d->moduleView->setBackVisible(false);
++        d->moduleView->show();
+         Q_EMIT landingChanged();
+     }
+ 
+@@ -686,6 +689,16 @@ void SidebarMode::initWidget()
+     d->landingWidget->hide();
+     d->mainLayout->addWidget(d->landingWidget);
+     connect(d->moduleView, &ModuleView::backRequested, this, &SidebarMode::goBack);
++    // MacSettings: MAC_TEST_BACK=<page id> opens General's list and then that
++    // page from it, as clicking would (for checking the ‹ button).
++    if (qEnvironmentVariableIsSet("MAC_TEST_BACK")) {
++        QTimer::singleShot(2000, this, [this] {
++            openLanding({{QStringLiteral("key"), QStringLiteral("general")}, {QStringLiteral("name"), QStringLiteral("General")}});
++            QTimer::singleShot(800, this, [this] {
++                openFromLanding(qEnvironmentVariable("MAC_TEST_BACK"));
++            });
++        });
++    }
+ 
+     if (!startupModule().isEmpty()) {
+         initPlaceHolderWidget();
+diff --git a/app/qml/MacBackButton.qml b/app/qml/MacBackButton.qml
+new file mode 100644
+index 00000000..b02624fd
+--- /dev/null
++++ b/app/qml/MacBackButton.qml
+@@ -0,0 +1,25 @@
++// SPDX-FileCopyrightText: 2026 Brhett
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++import QtQuick
++import QtQuick.Controls as QQC2
++
++// MacSettings: the ‹ back to a list of pages, inside a QML page's own header
++// (a widget laid over the page would be hidden under it). ModuleView makes
++// room for it with the header's titleLeftPadding.
++QQC2.ToolButton {
++    required property QtObject view
++    // Height of the page's header (Kirigami's global toolbar).
++    property real headerHeight: 46
++
++    x: 8
++    y: Math.round((headerHeight - height) / 2)
++    z: 1000
++    icon.name: "go-previous"
++    display: QQC2.AbstractButton.IconOnly
++    text: typeof i18nc === "function" ? i18nc("@info:tooltip", "Back") : "Back"
++    QQC2.ToolTip.text: text
++    QQC2.ToolTip.visible: hovered
++    QQC2.ToolTip.delay: 600
++    onClicked: view.requestBack()
++}
+diff --git a/app/qml/Main.qml b/app/qml/Main.qml
+index 5d6338d1..f0513e59 100644
+--- a/app/qml/Main.qml
++++ b/app/qml/Main.qml
+@@ -108,6 +108,8 @@ Item {
+ 
+     // macOS's sidebar selection (the accent blue, as in the Mac menus).
+     readonly property color selectionColor: "#315bef"
++    // Where a row's icon starts: well inside its rounded selection.
++    readonly property real rowInset: Kirigami.Units.smallSpacing * 2 + 10
+ 
+     // The window has no title bar (SettingsChrome paints the glass behind
+     // this sidebar): empty space at the top moves it, double-click zooms.
+@@ -172,8 +174,8 @@ Item {
+ 
+                     RowLayout {
+                         anchors.fill: parent
+-                        anchors.leftMargin: Kirigami.Units.largeSpacing
+-                        anchors.rightMargin: Kirigami.Units.largeSpacing
++                        anchors.leftMargin: root.rowInset
++                        anchors.rightMargin: root.rowInset
+                         spacing: Kirigami.Units.largeSpacing
+ 
+                         KirigamiComponents.Avatar {
+@@ -224,8 +226,8 @@ Item {
+ 
+                         RowLayout {
+                             anchors.fill: parent
+-                            anchors.leftMargin: Kirigami.Units.largeSpacing
+-                            anchors.rightMargin: Kirigami.Units.largeSpacing
++                            anchors.leftMargin: root.rowInset
++                            anchors.rightMargin: root.rowInset
+                             spacing: Kirigami.Units.mediumSpacing
+ 
+                             MacTile {
+@@ -275,8 +277,8 @@ Item {
+ 
+                     RowLayout {
+                         anchors.fill: parent
+-                        anchors.leftMargin: Kirigami.Units.largeSpacing
+-                        anchors.rightMargin: Kirigami.Units.largeSpacing
++                        anchors.leftMargin: root.rowInset
++                        anchors.rightMargin: root.rowInset
+                         spacing: Kirigami.Units.mediumSpacing
+ 
+                         Kirigami.Icon {
+-- 
+2.56.0
+

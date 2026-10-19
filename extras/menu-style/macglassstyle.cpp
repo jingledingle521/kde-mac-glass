@@ -85,6 +85,14 @@ bool isSegmented(const QWidget *widget)
     return !bar || (!bar->tabsClosable() && !bar->isMovable());
 }
 
+// macOS's controls are slim: a button or pop-up button is only a little
+// taller than its text. Drawn centred in the (taller) space Breeze gives it.
+QRectF slim(const QRect &rect, const QFontMetrics &fm)
+{
+    const qreal height = qMin<qreal>(rect.height(), fm.height() + 8);
+    return QRectF(rect.left(), rect.top() + (rect.height() - height) / 2.0, rect.width(), height);
+}
+
 QPainterPath roundedRect(const QRectF &rect, qreal radius)
 {
     QPainterPath path;
@@ -411,7 +419,7 @@ public:
                 drawRadio(option, painter);
             } else {
                 const auto *button = qstyleoption_cast<const QStyleOptionButton *>(option);
-                drawBevel(QRectF(option->rect), option, button && (button->features & QStyleOptionButton::DefaultButton), painter);
+                drawBevel(slim(option->rect, option->fontMetrics), option, button && (button->features & QStyleOptionButton::DefaultButton), painter);
             }
             painter->restore();
             return;
@@ -442,7 +450,7 @@ public:
             if (button && !(button->features & QStyleOptionButton::Flat)) {
                 painter->save();
                 painter->setRenderHint(QPainter::Antialiasing);
-                drawBevel(QRectF(option->rect), option, button->features & QStyleOptionButton::DefaultButton, painter);
+                drawBevel(slim(option->rect, option->fontMetrics), option, button->features & QStyleOptionButton::DefaultButton, painter);
                 painter->restore();
                 return;
             }
@@ -607,14 +615,16 @@ private:
     // holding up and down chevrons.
     void drawPopUpButton(const QStyleOptionComboBox *combo, QPainter *painter, const QWidget *widget) const
     {
-        drawBevel(QRectF(combo->rect), combo, false, painter);
+        const QRectF bevel = slim(combo->rect, combo->fontMetrics);
+        drawBevel(bevel, combo, false, painter);
         const QRect arrow = subControlRect(CC_ComboBox, combo, SC_ComboBoxArrow, widget);
-        const qreal side = qMin<qreal>(combo->rect.height() - 6, 18);
-        const QRectF box(arrow.center().x() - side / 2 + 0.5, combo->rect.center().y() - side / 2 + 0.5, side, side);
+        // The chevron box fills the button's height but for a thin margin.
+        const qreal side = bevel.height() - 5;
+        const QRectF box(qMin<qreal>(arrow.center().x() - side / 2, bevel.right() - 2.5 - side), bevel.center().y() - side / 2, side, side);
         const bool enabled = combo->state & State_Enabled;
         painter->setPen(Qt::NoPen);
         painter->setBrush(enabled ? Accent : withAlpha(Accent, 0.35));
-        painter->drawPath(roundedRect(box, 4));
+        painter->drawPath(roundedRect(box, 3.5));
         QPen pen(withAlpha(Qt::white, enabled ? 1 : 0.6), 1.4);
         pen.setCapStyle(Qt::RoundCap);
         pen.setJoinStyle(Qt::RoundJoin);
