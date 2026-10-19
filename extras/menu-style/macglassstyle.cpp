@@ -1,8 +1,18 @@
-// MacGlass widget style: Breeze for everything except menus, which are drawn
-// like macOS menus. That means a rounded frosted-glass panel (KWin blurs
-// behind it), items inset from the edge with a rounded blue highlight, a
-// checkmark column, shortcuts as Mac symbols (⇧⌘C) and thin inset separators.
-// The colours match the Menu Bar widget and the MacGlass Kvantum menus.
+// MacGlass widget style: Breeze, with macOS's menus and controls.
+//
+// Menus are drawn like macOS menus: a rounded frosted-glass panel (KWin
+// blurs behind it), items inset from the edge with a rounded blue highlight,
+// a checkmark column, shortcuts as Mac symbols (⇧⌘C) and thin inset
+// separators. The colours match the Menu Bar widget and the MacGlass
+// Kvantum menus.
+//
+// Push buttons, checkboxes, radio buttons, pop-up buttons (non-editable
+// combo boxes) and sliders are drawn like macOS's: soft rounded fills, the
+// accent blue for checked and default, a pop-up button's blue chevron box,
+// a slider's thin track and white knob; tab bars along the top are a
+// segmented control over a rounded panel. Everything else is Breeze. QML apps
+// using the desktop Qt Quick Controls style get the same, since that style
+// paints through the widget style.
 //
 // Set it with: kwriteconfig6 --group KDE --key widgetStyle MacGlass
 
@@ -21,7 +31,13 @@
 #include <QRegularExpression>
 #include <QStyleFactory>
 #include <QStyleOptionMenuItem>
+#include <QStyleOptionButton>
+#include <QStyleOptionComboBox>
+#include <QStyleOptionSlider>
+#include <QStyleOptionTab>
+#include <QStyleOptionTabWidgetFrame>
 #include <QStylePlugin>
+#include <QTabBar>
 #include <QWindow>
 
 namespace
@@ -41,6 +57,8 @@ constexpr int ShadowSize = 22;
 constexpr int ShadowOffset = 5; // the shadow falls a little lower
 
 const QColor Highlight(49, 91, 239); // the Apple menu's hover blue
+const QColor Accent = Highlight; // checked boxes, default buttons, sliders
+constexpr qreal ControlRadius = 5;
 
 bool isDark(const QPalette &palette)
 {
@@ -56,6 +74,15 @@ QColor withAlpha(QColor color, qreal alpha)
 QColor textColor(const QPalette &palette)
 {
     return isDark(palette) ? QColor(245, 245, 247) : QColor(29, 29, 31);
+}
+
+// Tab bars that pick a pane (settings) become macOS's segmented control;
+// document tabs (closable or movable: Konsole, Dolphin, Kate) stay Breeze.
+// QML tab bars come without a widget and count as panes.
+bool isSegmented(const QWidget *widget)
+{
+    const auto *bar = qobject_cast<const QTabBar *>(widget);
+    return !bar || (!bar->tabsClosable() && !bar->isMovable());
 }
 
 QPainterPath roundedRect(const QRectF &rect, qreal radius)
@@ -269,6 +296,11 @@ public:
             menu->installEventFilter(m_decorator);
             return;
         }
+        if (auto *bar = qobject_cast<QTabBar *>(widget); bar && isSegmented(bar)) {
+            // A compact segmented control, not tabs stretched across.
+            bar->setExpanding(false);
+            bar->setDrawBase(false);
+        }
         QProxyStyle::polish(widget);
     }
 
@@ -309,6 +341,11 @@ public:
             return 150;
         case SH_Menu_FadeOutOnHide:
             return 0;
+        case SH_TabBar_Alignment:
+            if (isSegmented(widget)) {
+                return Qt::AlignHCenter; // macOS centres its segmented controls
+            }
+            return QProxyStyle::styleHint(hint, option, widget, returnData);
         default:
             return QProxyStyle::styleHint(hint, option, widget, returnData);
         }
@@ -351,6 +388,34 @@ public:
         if (element == PE_FrameMenu) {
             return; // drawn with the panel
         }
+        if (element == PE_FrameTabWidget) {
+            // The tab page as macOS's grouped panel.
+            const bool dark = isDark(option->palette);
+            painter->save();
+            painter->setRenderHint(QPainter::Antialiasing);
+            painter->setPen(QPen(dark ? QColor(255, 255, 255, 18) : QColor(0, 0, 0, 22), 1));
+            painter->setBrush(dark ? QColor(255, 255, 255, 8) : QColor(0, 0, 0, 8));
+            painter->drawPath(roundedRect(QRectF(option->rect).adjusted(0.5, 0.5, -0.5, -0.5), 8));
+            painter->restore();
+            return;
+        }
+        if (element == PE_FrameTabBarBase && isSegmented(widget)) {
+            return; // the segmented control has no base line
+        }
+        if (element == PE_IndicatorCheckBox || element == PE_IndicatorRadioButton || element == PE_PanelButtonCommand) {
+            painter->save();
+            painter->setRenderHint(QPainter::Antialiasing);
+            if (element == PE_IndicatorCheckBox) {
+                drawCheckBox(option, painter);
+            } else if (element == PE_IndicatorRadioButton) {
+                drawRadio(option, painter);
+            } else {
+                const auto *button = qstyleoption_cast<const QStyleOptionButton *>(option);
+                drawBevel(QRectF(option->rect), option, button && (button->features & QStyleOptionButton::DefaultButton), painter);
+            }
+            painter->restore();
+            return;
+        }
         if (element != PE_PanelMenu) {
             QProxyStyle::drawPrimitive(element, option, painter, widget);
             return;
@@ -372,6 +437,37 @@ public:
 
     void drawControl(ControlElement element, const QStyleOption *option, QPainter *painter, const QWidget *widget) const override
     {
+        if (element == CE_PushButtonBevel) {
+            const auto *button = qstyleoption_cast<const QStyleOptionButton *>(option);
+            if (button && !(button->features & QStyleOptionButton::Flat)) {
+                painter->save();
+                painter->setRenderHint(QPainter::Antialiasing);
+                drawBevel(QRectF(option->rect), option, button->features & QStyleOptionButton::DefaultButton, painter);
+                painter->restore();
+                return;
+            }
+        }
+        if (element == CE_TabBarTabShape) {
+            const auto *tab = qstyleoption_cast<const QStyleOptionTab *>(option);
+            if (tab && (tab->shape == QTabBar::RoundedNorth || tab->shape == QTabBar::TriangularNorth) && isSegmented(widget)) {
+                painter->save();
+                painter->setRenderHint(QPainter::Antialiasing);
+                drawSegment(tab, painter);
+                painter->restore();
+                return;
+            }
+        }
+        if (element == CE_PushButtonLabel) {
+            const auto *button = qstyleoption_cast<const QStyleOptionButton *>(option);
+            if (button && (button->features & QStyleOptionButton::DefaultButton) && (button->state & State_Enabled)) {
+                // White text on the accent.
+                QStyleOptionButton label(*button);
+                label.palette.setColor(QPalette::ButtonText, Qt::white);
+                label.palette.setColor(QPalette::WindowText, Qt::white);
+                QProxyStyle::drawControl(element, &label, painter, widget);
+                return;
+            }
+        }
         const auto *item = qstyleoption_cast<const QStyleOptionMenuItem *>(option);
         if (element != CE_MenuItem || !item) {
             if (element == CE_MenuEmptyArea || element == CE_MenuTearoff) {
@@ -386,7 +482,250 @@ public:
         painter->restore();
     }
 
+    void drawComplexControl(ComplexControl control, const QStyleOptionComplex *option, QPainter *painter, const QWidget *widget) const override
+    {
+        if (control == CC_ComboBox) {
+            const auto *combo = qstyleoption_cast<const QStyleOptionComboBox *>(option);
+            if (combo && !combo->editable && combo->frame) {
+                painter->save();
+                painter->setRenderHint(QPainter::Antialiasing);
+                drawPopUpButton(combo, painter, widget);
+                painter->restore();
+                return;
+            }
+        } else if (control == CC_Slider) {
+            const auto *slider = qstyleoption_cast<const QStyleOptionSlider *>(option);
+            if (slider) {
+                painter->save();
+                painter->setRenderHint(QPainter::Antialiasing);
+                drawSlider(slider, painter, widget);
+                painter->restore();
+                return;
+            }
+        }
+        QProxyStyle::drawComplexControl(control, option, painter, widget);
+    }
+
 private:
+    // ---- controls -------------------------------------------------------------
+
+    // A button's fill: soft and translucent on dark, white on light; the
+    // accent for a default button.
+    void drawBevel(const QRectF &rect, const QStyleOption *option, bool accent, QPainter *painter) const
+    {
+        const bool dark = isDark(option->palette);
+        const bool enabled = option->state & State_Enabled;
+        const bool pressed = option->state & (State_Sunken | State_On);
+        const bool hover = enabled && (option->state & State_MouseOver);
+        const QRectF r = rect.adjusted(0.5, 0.5, -0.5, -0.5);
+
+        if (!dark && enabled) {
+            // A faint drop shadow under light buttons.
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(QColor(0, 0, 0, 18));
+            painter->drawPath(roundedRect(r.translated(0, 0.8), ControlRadius));
+        }
+        QColor fill;
+        if (accent && enabled) {
+            fill = pressed ? Accent.darker(115) : hover ? Accent.lighter(108) : Accent;
+        } else if (dark) {
+            fill = QColor(255, 255, 255, !enabled ? 14 : pressed ? 58 : hover ? 42 : 33);
+        } else {
+            fill = !enabled ? QColor(255, 255, 255, 140) : pressed ? QColor(232, 232, 236) : QColor(255, 255, 255);
+        }
+        painter->setPen(QPen(dark ? QColor(255, 255, 255, accent && enabled ? 30 : 16) : QColor(0, 0, 0, accent ? 0 : 34), 1));
+        painter->setBrush(fill);
+        painter->drawPath(roundedRect(r, ControlRadius));
+        if (dark && enabled) {
+            // A light top edge, as macOS's dark buttons have.
+            painter->setPen(QPen(QColor(255, 255, 255, 22), 1));
+            painter->setBrush(Qt::NoBrush);
+            painter->save();
+            painter->setClipRect(QRectF(r.left(), r.top(), r.width(), 3));
+            painter->drawPath(roundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), ControlRadius - 0.5));
+            painter->restore();
+        }
+    }
+
+    void drawCheckBox(const QStyleOption *option, QPainter *painter) const
+    {
+        const bool dark = isDark(option->palette);
+        const bool enabled = option->state & State_Enabled;
+        const bool on = option->state & State_On;
+        const bool partial = option->state & State_NoChange;
+        const qreal size = qMin<qreal>(14, qMin(option->rect.width(), option->rect.height()));
+        const QRectF box(QRectF(option->rect).center() - QPointF(size / 2, size / 2), QSizeF(size, size));
+        const QRectF r = box.adjusted(0.5, 0.5, -0.5, -0.5);
+
+        if (on || partial) {
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(enabled ? Accent : withAlpha(Accent, 0.4));
+            painter->drawPath(roundedRect(r, 3.5));
+            QPen pen(withAlpha(Qt::white, enabled ? 1 : 0.6), 1.7);
+            pen.setCapStyle(Qt::RoundCap);
+            pen.setJoinStyle(Qt::RoundJoin);
+            painter->setPen(pen);
+            painter->setBrush(Qt::NoBrush);
+            const QPointF c = box.center();
+            if (partial) {
+                painter->drawLine(c + QPointF(-3.2, 0), c + QPointF(3.2, 0));
+            } else {
+                QPainterPath tick;
+                tick.moveTo(c + QPointF(-3.4, 0.2));
+                tick.lineTo(c + QPointF(-1, 2.8));
+                tick.lineTo(c + QPointF(3.6, -2.8));
+                painter->drawPath(tick);
+            }
+            return;
+        }
+        painter->setPen(QPen(dark ? QColor(255, 255, 255, enabled ? 60 : 30) : QColor(0, 0, 0, enabled ? 60 : 30), 1));
+        painter->setBrush(dark ? QColor(255, 255, 255, (option->state & State_Sunken) ? 40 : 20) : QColor(255, 255, 255));
+        painter->drawPath(roundedRect(r, 3.5));
+    }
+
+    void drawRadio(const QStyleOption *option, QPainter *painter) const
+    {
+        const bool dark = isDark(option->palette);
+        const bool enabled = option->state & State_Enabled;
+        const bool on = option->state & State_On;
+        const qreal size = qMin<qreal>(14, qMin(option->rect.width(), option->rect.height()));
+        const QRectF box(QRectF(option->rect).center() - QPointF(size / 2, size / 2), QSizeF(size, size));
+        if (on) {
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(enabled ? Accent : withAlpha(Accent, 0.4));
+            painter->drawEllipse(box.adjusted(0.5, 0.5, -0.5, -0.5));
+            painter->setBrush(Qt::white);
+            painter->drawEllipse(box.center(), 2.6, 2.6);
+            return;
+        }
+        painter->setPen(QPen(dark ? QColor(255, 255, 255, enabled ? 60 : 30) : QColor(0, 0, 0, enabled ? 60 : 30), 1));
+        painter->setBrush(dark ? QColor(255, 255, 255, 20) : QColor(255, 255, 255));
+        painter->drawEllipse(box.adjusted(0.5, 0.5, -0.5, -0.5));
+    }
+
+    // macOS's pop-up button: a button with a small accent box at the right
+    // holding up and down chevrons.
+    void drawPopUpButton(const QStyleOptionComboBox *combo, QPainter *painter, const QWidget *widget) const
+    {
+        drawBevel(QRectF(combo->rect), combo, false, painter);
+        const QRect arrow = subControlRect(CC_ComboBox, combo, SC_ComboBoxArrow, widget);
+        const qreal side = qMin<qreal>(combo->rect.height() - 6, 18);
+        const QRectF box(arrow.center().x() - side / 2 + 0.5, combo->rect.center().y() - side / 2 + 0.5, side, side);
+        const bool enabled = combo->state & State_Enabled;
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(enabled ? Accent : withAlpha(Accent, 0.35));
+        painter->drawPath(roundedRect(box, 4));
+        QPen pen(withAlpha(Qt::white, enabled ? 1 : 0.6), 1.4);
+        pen.setCapStyle(Qt::RoundCap);
+        pen.setJoinStyle(Qt::RoundJoin);
+        painter->setPen(pen);
+        painter->setBrush(Qt::NoBrush);
+        const QPointF c = box.center();
+        QPainterPath up;
+        up.moveTo(c + QPointF(-2.6, -1.4));
+        up.lineTo(c + QPointF(0, -4));
+        up.lineTo(c + QPointF(2.6, -1.4));
+        QPainterPath down;
+        down.moveTo(c + QPointF(-2.6, 1.4));
+        down.lineTo(c + QPointF(0, 4));
+        down.lineTo(c + QPointF(2.6, 1.4));
+        painter->drawPath(up);
+        painter->drawPath(down);
+    }
+
+    // macOS's slider: a thin rounded track, accent up to the knob, and a
+    // white round knob with a soft shadow. Tick marks stay Breeze's.
+    void drawSlider(const QStyleOptionSlider *slider, QPainter *painter, const QWidget *widget) const
+    {
+        const bool dark = isDark(slider->palette);
+        const bool enabled = slider->state & State_Enabled;
+        const bool horizontal = slider->orientation == Qt::Horizontal;
+
+        if (slider->subControls & SC_SliderTickmarks) {
+            QStyleOptionSlider ticks(*slider);
+            ticks.subControls = SC_SliderTickmarks;
+            QProxyStyle::drawComplexControl(CC_Slider, &ticks, painter, widget);
+        }
+
+        const QRect groove = subControlRect(CC_Slider, slider, SC_SliderGroove, widget);
+        const QRect handle = subControlRect(CC_Slider, slider, SC_SliderHandle, widget);
+        const qreal thickness = 4;
+        QRectF track;
+        if (horizontal) {
+            track = QRectF(groove.left() + 2, groove.center().y() - thickness / 2 + 0.5, groove.width() - 4, thickness);
+        } else {
+            track = QRectF(groove.center().x() - thickness / 2 + 0.5, groove.top() + 2, thickness, groove.height() - 4);
+        }
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(dark ? QColor(255, 255, 255, 40) : QColor(0, 0, 0, 30));
+        painter->drawPath(roundedRect(track, thickness / 2));
+
+        const QPointF knob = QRectF(handle).center();
+        QRectF filled = track;
+        if (horizontal) {
+            if (slider->upsideDown) {
+                filled.setLeft(knob.x());
+            } else {
+                filled.setRight(knob.x());
+            }
+        } else {
+            if (slider->upsideDown) {
+                filled.setBottom(knob.y());
+            } else {
+                filled.setTop(knob.y());
+            }
+        }
+        painter->setBrush(enabled ? Accent : withAlpha(Accent, 0.35));
+        painter->drawPath(roundedRect(filled, thickness / 2));
+
+        if (slider->subControls & SC_SliderHandle) {
+            const qreal d = qMin<qreal>(18, qMin(handle.width(), handle.height()));
+            const QRectF k(knob - QPointF(d / 2, d / 2), QSizeF(d, d));
+            painter->setBrush(QColor(0, 0, 0, 45));
+            painter->drawEllipse(k.translated(0, 0.8).adjusted(-0.5, -0.5, 0.5, 0.5));
+            const bool pressed = slider->state & State_Sunken && slider->activeSubControls & SC_SliderHandle;
+            painter->setBrush(!enabled ? QColor(200, 200, 204) : pressed ? QColor(235, 235, 238) : QColor(250, 250, 252));
+            painter->setPen(QPen(QColor(0, 0, 0, 30), 0.5));
+            painter->drawEllipse(k.adjusted(0.5, 0.5, -0.5, -0.5));
+        }
+    }
+
+    // One segment of macOS's segmented control: a shared rounded track, the
+    // selected segment raised in it, hairlines between unselected ones.
+    void drawSegment(const QStyleOptionTab *tab, QPainter *painter) const
+    {
+        const bool dark = isDark(tab->palette);
+        const bool selected = tab->state & State_Selected;
+        const bool hover = (tab->state & State_MouseOver) && !selected;
+        const QRectF rect = QRectF(tab->rect).adjusted(0, 3, 0, -3);
+        const bool first = tab->position == QStyleOptionTab::Beginning || tab->position == QStyleOptionTab::OnlyOneTab;
+        const bool last = tab->position == QStyleOptionTab::End || tab->position == QStyleOptionTab::OnlyOneTab;
+        constexpr qreal r = 6;
+
+        // The track, rounded only at the ends of the control.
+        QPainterPath track;
+        track.addRoundedRect(rect.adjusted(first ? 0.5 : -r, 0.5, last ? -0.5 : r, -0.5), r, r);
+        painter->save();
+        painter->setClipRect(rect.adjusted(0, -1, 0, 1));
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(dark ? QColor(255, 255, 255, hover ? 28 : 18) : QColor(0, 0, 0, hover ? 18 : 12));
+        painter->drawPath(track);
+        painter->restore();
+
+        if (selected) {
+            const QRectF raised = rect.adjusted(2, 2, -2, -2);
+            painter->setPen(QPen(dark ? QColor(255, 255, 255, 20) : QColor(0, 0, 0, 25), 0.5));
+            painter->setBrush(dark ? QColor(255, 255, 255, 52) : QColor(255, 255, 255));
+            painter->drawPath(roundedRect(raised, r - 2));
+        } else if (!last && !(tab->selectedPosition == QStyleOptionTab::NextIsSelected)) {
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(dark ? QColor(255, 255, 255, 30) : QColor(0, 0, 0, 30));
+            painter->drawRect(QRectF(rect.right() - 0.5, rect.top() + 6, 1, rect.height() - 12));
+        }
+    }
+
+    // ---- menus ----------------------------------------------------------------
+
     void drawMenuItem(const QStyleOptionMenuItem *item, QPainter *painter) const
     {
         const QPalette &palette = item->palette;
