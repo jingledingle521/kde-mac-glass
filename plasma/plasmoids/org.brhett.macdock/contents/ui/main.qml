@@ -50,6 +50,35 @@ PlasmoidItem {
     // while the divider is dragged (the bar tracks the pointer) and while the
     // dock first fills up.
     property bool animateLayout: false
+
+    // Hiding (the divider's menu turns it on, as on macOS): the dock slides
+    // off the bottom of the screen and comes back while the pointer is at
+    // the bottom edge where it sits, or on it, or one of its menus is open.
+    readonly property bool autoHide: Plasmoid.configuration.autoHide
+    readonly property bool dockWanted: barHover.hovered || edgeHover.hovered || dockMenu.opened || resizing
+    property bool resizing: false
+    property bool dockHidden: false
+    onDockWantedChanged: {
+        if (dockWanted) {
+            hideTimer.stop();
+            dockHidden = false;
+        } else if (autoHide) {
+            hideTimer.restart();
+        }
+    }
+    onAutoHideChanged: {
+        if (autoHide) {
+            hideTimer.restart();
+        } else {
+            hideTimer.stop();
+            dockHidden = false;
+        }
+    }
+    Timer {
+        id: hideTimer
+        interval: 700
+        onTriggered: if (root.autoHide && !root.dockWanted) root.dockHidden = true
+    }
     readonly property int layoutDuration: 280
 
     Timer {
@@ -214,14 +243,29 @@ PlasmoidItem {
         LayerShell.Window.layer: LayerShell.Window.LayerTop
         LayerShell.Window.anchors: LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight | LayerShell.Window.AnchorBottom
         LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
-        // Maximized windows stop above the dock. Only the saved size: windows
-        // don't resize along with every step of a drag.
-        LayerShell.Window.exclusionZone: Plasmoid.configuration.dockSize + 2 * root.gap
+        // Maximized windows stop above the dock (or use the whole screen when
+        // it hides). Only the saved size: windows don't resize along with
+        // every step of a drag.
+        LayerShell.Window.exclusionZone: root.autoHide ? 0 : Plasmoid.configuration.dockSize + 2 * root.gap
 
         DockSurface {
             glass: bar
-            inputItem: bar
+            inputItem: hitArea
             radius: 16
+        }
+
+        // What takes the pointer: the bar and the gap under it, or, while the
+        // dock is hidden, a strip along the bottom edge where it sits
+        // (pointing at it brings the dock back).
+        Item {
+            id: hitArea
+            x: bar.x
+            width: bar.width
+            y: root.dockHidden ? dockWindow.height - 3 : bar.y
+            height: dockWindow.height - y
+            HoverHandler {
+                id: edgeHover
+            }
         }
 
         KSvg.FrameSvgItem {
@@ -241,7 +285,16 @@ PlasmoidItem {
             width: row.width + 2 * root.endPadding
             height: root.dockSize
             x: Math.round((dockWindow.width - width) / 2)
-            y: dockWindow.height - root.gap - height
+            y: dockWindow.height - root.gap - height + (root.dockHidden ? height + root.gap + 12 : 0)
+
+            Behavior on y {
+                // Not while the divider resizes it (the bar follows the pointer).
+                enabled: root.animateLayout
+                NumberAnimation { duration: 250; easing.type: Easing.OutCubic }
+            }
+            HoverHandler {
+                id: barHover
+            }
 
             Row {
                 id: row
@@ -304,28 +357,49 @@ PlasmoidItem {
                     height: root.thickness
 
                     MouseArea {
+                        id: divider
                         property real startY
                         property int startSize
 
                         anchors.fill: parent
                         hoverEnabled: true
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
                         cursorShape: Qt.SizeVerCursor
+                        // Right-click: the dock's own menu, as on macOS.
+                        onClicked: mouse => {
+                            if (mouse.button === Qt.RightButton) {
+                                root.menu.popup(divider, [
+                                    {
+                                        label: root.autoHide ? i18n("Turn Hiding Off") : i18n("Turn Hiding On"),
+                                        trigger: () => Plasmoid.configuration.autoHide = !root.autoHide
+                                    }
+                                ]);
+                            }
+                        }
                         // The window never moves, so its coordinates are the
                         // screen's: the pointer's height in it is all it takes.
                         onPressed: mouse => {
+                            if (mouse.button !== Qt.LeftButton) {
+                                return;
+                            }
                             startY = mapToItem(null, mouse.x, mouse.y).y;
                             startSize = root.dockSize;
                             root.animateLayout = false;
+                            root.resizing = true;
                         }
                         onPositionChanged: mouse => {
-                            if (pressed) {
+                            if (pressed && (pressedButtons & Qt.LeftButton)) {
                                 const size = startSize + Math.round(startY - mapToItem(null, mouse.x, mouse.y).y);
                                 root.dockSize = Math.max(root.minDockSize, Math.min(root.maxDockSize, size));
                             }
                         }
-                        onReleased: {
+                        onReleased: mouse => {
+                            if (mouse.button !== Qt.LeftButton) {
+                                return;
+                            }
                             Plasmoid.configuration.dockSize = root.dockSize;
                             root.animateLayout = true;
+                            root.resizing = false;
                         }
                     }
 

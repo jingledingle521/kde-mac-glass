@@ -58,7 +58,9 @@ draws the dock in its own window along the bottom of the screen. (Plasma moves
 and resizes a panel's window in two separate steps, a frame apart, so a panel
 dock shook while it was resized.) Hover an icon for its name, right-click for
 its windows and actions, drag icons to reorder, and drag the divider before
-Downloads and Trash up or down to resize the dock, as on macOS. Icons grow in
+Downloads and Trash up or down to resize the dock, as on macOS; right-click
+it to turn hiding on or off (the dock slides away and comes back when you
+point at the bottom edge). Icons grow in
 when an app opens and shrink away when it quits. Maximized windows stop above it.
 
 ### Notification Center
