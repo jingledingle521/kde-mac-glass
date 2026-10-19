@@ -1,0 +1,997 @@
+From 2b555001c7fe6aaab2a9f6acf15aa781b67bbcfb Mon Sep 17 00:00:00 2001
+From: jingledingle521 <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 21:03:34 -0500
+Subject: [PATCH 6/6] =?UTF-8?q?Mac=20Settings:=20macOS=20Wi=E2=80=91Fi=20a?=
+ =?UTF-8?q?nd=20Bluetooth=20pages?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Wi‑Fi and Bluetooth open this app's own pages (MacWifiPage.qml,
+MacBluetoothPage.qml) instead of KDE's, with KDE's full pages behind
+Details…/Advanced… and ‹ back. Wi‑Fi: on/off, the network you're on,
+known and other networks with Connect (rescanning while open), Forget.
+Bluetooth: on/off, discoverable while open, My Devices (connect,
+disconnect, forget) and nearby named devices found while open (Connect
+pairs, trusts and connects). New pieces: MacSwitch, MacGroup,
+MacGroupRow. MAC_TEST_ENTRY=<entry> opens a sidebar entry at startup.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ app/CMakeLists.txt           |   5 +
+ app/SidebarMode.cpp          |   5 +
+ app/SidebarMode.h            |   3 +
+ app/qml/Entries.js           |   8 +-
+ app/qml/LandingPage.qml      |  14 +-
+ app/qml/MacBluetoothPage.qml | 334 ++++++++++++++++++++++++++++++++++
+ app/qml/MacGroup.qml         |  28 +++
+ app/qml/MacGroupRow.qml      |  44 +++++
+ app/qml/MacSwitch.qml        |  44 +++++
+ app/qml/MacWifiPage.qml      | 336 +++++++++++++++++++++++++++++++++++
+ app/qml/Main.qml             |   8 +-
+ 11 files changed, 824 insertions(+), 5 deletions(-)
+ create mode 100644 app/qml/MacBluetoothPage.qml
+ create mode 100644 app/qml/MacGroup.qml
+ create mode 100644 app/qml/MacGroupRow.qml
+ create mode 100644 app/qml/MacSwitch.qml
+ create mode 100644 app/qml/MacWifiPage.qml
+
+diff --git a/app/CMakeLists.txt b/app/CMakeLists.txt
+index 8a3f1c00..b96a4e38 100644
+--- a/app/CMakeLists.txt
++++ b/app/CMakeLists.txt
+@@ -33,6 +33,11 @@ ecm_target_qml_sources(systemsettings SOURCES
+     qml/IntroPage.qml
+     qml/LandingPage.qml
+     qml/MacBackButton.qml
++    qml/MacBluetoothPage.qml
++    qml/MacGroup.qml
++    qml/MacGroupRow.qml
++    qml/MacSwitch.qml
++    qml/MacWifiPage.qml
+     qml/MacFormPanels.qml
+     qml/MacTile.qml
+     qml/Main.qml
+diff --git a/app/SidebarMode.cpp b/app/SidebarMode.cpp
+index 4aef9de3..3b06eac6 100644
+--- a/app/SidebarMode.cpp
++++ b/app/SidebarMode.cpp
+@@ -961,6 +961,11 @@ void SidebarMode::goBack()
+ }
+ 
+ 
++QString SidebarMode::testEntry() const
++{
++    return qEnvironmentVariable("MAC_TEST_ENTRY");
++}
++
+ // MacSettings: window controls --------------------------------------------
+ 
+ QWidget *SidebarMode::sidebarWidget() const
+diff --git a/app/SidebarMode.h b/app/SidebarMode.h
+index f1771271..5da7ca76 100644
+--- a/app/SidebarMode.h
++++ b/app/SidebarMode.h
+@@ -171,6 +171,9 @@ public:
+     /** Opens a page from the list; back returns to the list. */
+     Q_INVOKABLE void openFromLanding(const QString &pluginId);
+     Q_INVOKABLE void goBack();
++    /** For checking without clicking: the sidebar entry to open at startup
++     *  (MAC_TEST_ENTRY, e.g. "wifi"), or empty. */
++    Q_INVOKABLE QString testEntry() const;
+ 
+     // MacSettings: window controls.
+     QWidget *sidebarWidget() const;
+diff --git a/app/qml/Entries.js b/app/qml/Entries.js
+index 47371e31..c86a7796 100644
+--- a/app/qml/Entries.js
++++ b/app/qml/Entries.js
+@@ -4,7 +4,9 @@
+ // MacSettings: the sidebar, arranged as macOS's System Settings. Each entry
+ // is a coloured tile (a white glyph from the icon theme on a macOS colour)
+ // and the KDE pages (KCM plugin ids) it covers: one page opens directly;
+-// several open a list of them, in sections. Pages that aren't installed or
++// several open a list of them, in sections. An entry with a `page` opens
++// this app's own page instead (Mac<Page>Page.qml), with KDE's pages behind
++// its Details…/Advanced… buttons. Pages that aren't installed or
+ // don't apply here are left out, and so are entries left with none.
+ 
+ .pragma library
+@@ -38,8 +40,8 @@ const pageNames = {
+ // Groups, separated by space in the sidebar as on macOS.
+ const groups = [
+     [
+-        { key: "wifi", name: "Wi‑Fi", glyph: "network-wireless-symbolic", color: blue, sections: [["kcm_networkmanagement"]] },
+-        { key: "bluetooth", name: "Bluetooth", glyph: "bluetooth-symbolic", color: blue, sections: [["kcm_bluetooth"]] },
++        { key: "wifi", name: "Wi‑Fi", glyph: "network-wireless-symbolic", color: blue, page: "wifi", sections: [["kcm_networkmanagement"]] },
++        { key: "bluetooth", name: "Bluetooth", glyph: "bluetooth-symbolic", color: blue, page: "bluetooth", sections: [["kcm_bluetooth"]] },
+         { key: "network", name: "Network", glyph: "globe-symbolic", color: blue, sections: [
+             ["kcm_networkmanagement", "kcm_proxy", "kcm_netpref"],
+         ] },
+diff --git a/app/qml/LandingPage.qml b/app/qml/LandingPage.qml
+index 9373b4f9..daa30243 100644
+--- a/app/qml/LandingPage.qml
++++ b/app/qml/LandingPage.qml
+@@ -46,7 +46,9 @@ Rectangle {
+                 RowLayout {
+                     spacing: Kirigami.Units.largeSpacing
+ 
++                    // (This app's own pages carry the tile in their first card.)
+                     MacTile {
++                        visible: !page.entry.page
+                         glyph: page.entry.glyph || ""
+                         tint: page.entry.color || "#8e8e93"
+                         size: 34
+@@ -58,8 +60,18 @@ Rectangle {
+                     }
+                 }
+ 
++                // Wi‑Fi and Bluetooth: this app's own pages.
++                Loader {
++                    Layout.fillWidth: true
++                    active: (page.entry.page || "") !== ""
++                    visible: active
++                    source: page.entry.page === "wifi" ? "MacWifiPage.qml"
++                          : page.entry.page === "bluetooth" ? "MacBluetoothPage.qml"
++                          : ""
++                }
++
+                 Repeater {
+-                    model: page.entry.sections || []
++                    model: page.entry.page ? [] : (page.entry.sections || [])
+ 
+                     // One rounded group of rows with hairlines between them.
+                     delegate: Rectangle {
+diff --git a/app/qml/MacBluetoothPage.qml b/app/qml/MacBluetoothPage.qml
+new file mode 100644
+index 00000000..b6d97013
+--- /dev/null
++++ b/app/qml/MacBluetoothPage.qml
+@@ -0,0 +1,334 @@
++// SPDX-FileCopyrightText: 2026 Brhett
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++pragma ComponentBehavior: Bound
++
++import QtQuick
++import QtQuick.Controls as QQC2
++import QtQuick.Layouts
++import org.kde.kirigami as Kirigami
++import org.kde.bluezqt as BluezQt
++
++// MacSettings: macOS's Bluetooth page: Bluetooth on or off, the computer
++// discoverable while the page is open, your devices (connect, disconnect,
++// forget) and nearby ones found by scanning while the page is open
++// (Connect pairs, trusts and connects; PINs are asked for by Plasma's
++// Bluetooth agent). Advanced… opens KDE's full Bluetooth page.
++ColumnLayout {
++    id: page
++
++    spacing: Kirigami.Units.gridUnit
++
++    readonly property var manager: BluezQt.Manager
++    readonly property var adapter: manager.usableAdapter
++    readonly property bool on: manager.bluetoothOperational
++
++    property var myDevices: []
++    property var nearby: []
++    // The device being paired by Connect, connected once paired.
++    property var pairing: null
++    // Whether we made the adapter discoverable (and so undo it on leaving).
++    property bool madeDiscoverable: false
++
++    function rebuild() {
++        const mine = [], near = [];
++        for (let i = 0; i < rows.count; ++i) {
++            const r = rows.objectAt(i);
++            if (!r) {
++                continue;
++            }
++            const d = {
++                ubi: r.model.Ubi,
++                name: r.model.Name || r.model.Address,
++                // Unnamed devices get their address as a name (with dashes).
++                hasName: (r.model.Name || "") !== "" && !/^([0-9a-f]{2}[-:]){5}[0-9a-f]{2}$/i.test(r.model.Name),
++                icon: r.model.Icon || "preferences-system-bluetooth",
++                connected: r.model.Connected === true,
++                paired: r.model.Paired === true
++            };
++            if (d.paired) {
++                mine.push(d);
++            } else if (d.hasName) {
++                near.push(d);
++            }
++        }
++        mine.sort((a, b) => (b.connected - a.connected) || a.name.localeCompare(b.name));
++        near.sort((a, b) => a.name.localeCompare(b.name));
++        myDevices = mine;
++        nearby = near;
++    }
++
++    function setOn(enable) {
++        manager.bluetoothBlocked = !enable;
++        for (const a of manager.adapters) {
++            a.powered = enable;
++        }
++    }
++
++    function device(ubi) {
++        return manager.deviceForUbi(ubi);
++    }
++
++    function connectNew(ubi) {
++        const d = device(ubi);
++        if (!d) {
++            return;
++        }
++        pairing = d;
++        d.pair();
++    }
++
++    // While the page is open: discoverable and scanning, as on macOS.
++    function startLooking() {
++        if (!adapter || !adapter.powered) {
++            return;
++        }
++        if (!adapter.discoverable) {
++            adapter.discoverable = true;
++            madeDiscoverable = true;
++        }
++        if (!adapter.discovering) {
++            adapter.startDiscovery();
++        }
++    }
++    function stopLooking() {
++        if (!adapter) {
++            return;
++        }
++        if (adapter.discovering) {
++            adapter.stopDiscovery();
++        }
++        if (madeDiscoverable) {
++            adapter.discoverable = false;
++            madeDiscoverable = false;
++        }
++    }
++
++    onOnChanged: Qt.callLater(on ? startLooking : stopLooking)
++    onAdapterChanged: Qt.callLater(startLooking)
++    Component.onCompleted: Qt.callLater(startLooking)
++    Component.onDestruction: stopLooking()
++
++    Connections {
++        target: page.pairing
++        function onPairedChanged() {
++            if (page.pairing && page.pairing.paired) {
++                page.pairing.trusted = true;
++                page.pairing.connectToDevice();
++                page.pairing = null;
++            }
++        }
++    }
++
++    BluezQt.DevicesModel {
++        id: devicesModel
++        onRowsInserted: rebuildTimer.restart()
++        onRowsRemoved: rebuildTimer.restart()
++        onDataChanged: rebuildTimer.restart()
++        onModelReset: rebuildTimer.restart()
++    }
++    Instantiator {
++        id: rows
++        model: devicesModel
++        delegate: QtObject {
++            required property var model
++        }
++        onObjectAdded: rebuildTimer.restart()
++        onObjectRemoved: rebuildTimer.restart()
++    }
++    Timer {
++        id: rebuildTimer
++        interval: 50
++        onTriggered: page.rebuild()
++    }
++
++    // ---- Bluetooth on or off --------------------------------------------------
++    MacGroup {
++        MacGroupRow {
++            first: true
++            implicitHeight: Kirigami.Units.gridUnit * 3.6
++
++            MacTile {
++                glyph: "bluetooth-symbolic"
++                tint: "#0a84ff"
++                size: 36
++            }
++            ColumnLayout {
++                Layout.fillWidth: true
++                spacing: 2
++                QQC2.Label {
++                    text: i18nc("@title", "Bluetooth")
++                    font.weight: Font.Bold
++                }
++                QQC2.Label {
++                    Layout.fillWidth: true
++                    text: !page.manager.operational ? i18n("Bluetooth isn't available on this computer.")
++                        : page.on && page.adapter ? i18n("This computer is discoverable as “%1” while Bluetooth settings are open.", page.adapter.name)
++                        : i18n("Turn on Bluetooth to connect to devices like headphones, keyboards and mice.")
++                    font: Kirigami.Theme.smallFont
++                    opacity: 0.6
++                    wrapMode: Text.Wrap
++                }
++            }
++            MacSwitch {
++                checked: page.on
++                enabled: page.manager.operational || page.manager.bluetoothBlocked
++                onToggled: page.setOn(checked)
++            }
++        }
++    }
++
++    // ---- My Devices -----------------------------------------------------------
++    SectionTitle {
++        visible: page.myDevices.length > 0
++        text: i18n("My Devices")
++    }
++    MacGroup {
++        visible: page.myDevices.length > 0
++        Repeater {
++            model: page.myDevices
++            delegate: DeviceRow {
++                mine: true
++            }
++        }
++    }
++
++    // ---- Nearby Devices -------------------------------------------------------
++    RowLayout {
++        visible: page.on
++        spacing: Kirigami.Units.smallSpacing
++        SectionTitle {
++            text: i18n("Nearby Devices")
++        }
++        QQC2.BusyIndicator {
++            Layout.preferredWidth: Kirigami.Units.iconSizes.small
++            Layout.preferredHeight: Kirigami.Units.iconSizes.small
++            running: page.adapter ? page.adapter.discovering : false
++            visible: running
++        }
++        Item {
++            Layout.fillWidth: true
++        }
++    }
++    MacGroup {
++        visible: page.on
++        Repeater {
++            model: page.nearby
++            delegate: DeviceRow {}
++        }
++        MacGroupRow {
++            first: true
++            visible: page.nearby.length === 0
++            QQC2.Label {
++                Layout.fillWidth: true
++                text: i18n("Looking for devices…")
++                opacity: 0.55
++            }
++        }
++    }
++
++    RowLayout {
++        Layout.fillWidth: true
++        Item {
++            Layout.fillWidth: true
++        }
++        QQC2.Button {
++            text: i18n("Advanced…")
++            onClicked: systemsettings.openFromLanding("kcm_bluetooth")
++        }
++    }
++
++    // ---- pieces -------------------------------------------------------------
++
++    component SectionTitle: QQC2.Label {
++        Layout.leftMargin: Kirigami.Units.smallSpacing
++        Layout.topMargin: Kirigami.Units.smallSpacing
++        font.weight: Font.Bold
++    }
++
++    // A device: its icon in a gray circle, its name, its state, and a button
++    // that appears on hover (Connect / Disconnect), as on macOS.
++    component DeviceRow: MacGroupRow {
++        id: deviceRow
++        required property var modelData
++        required property int index
++        property bool mine: false
++        readonly property bool hoveredRow: containsMouse || actionButton.hovered || menuButton.hovered
++        readonly property bool busy: page.pairing !== null && page.pairing.ubi === modelData.ubi
++
++        first: index === 0
++
++        Rectangle {
++            Layout.preferredWidth: 28
++            Layout.preferredHeight: 28
++            radius: 14
++            color: Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g, Kirigami.Theme.textColor.b, 0.12)
++            Kirigami.Icon {
++                anchors.centerIn: parent
++                width: 16
++                height: 16
++                // The symbolic glyph: colour icons turn into blank
++                // squares when drawn as a mask.
++                source: deviceRow.modelData.icon + "-symbolic"
++                fallback: "bluetooth-symbolic"
++                isMask: true
++                color: Kirigami.Theme.textColor
++            }
++        }
++        QQC2.Label {
++            Layout.fillWidth: true
++            text: deviceRow.modelData.name
++            elide: Text.ElideRight
++        }
++        QQC2.BusyIndicator {
++            Layout.preferredWidth: Kirigami.Units.iconSizes.small
++            Layout.preferredHeight: Kirigami.Units.iconSizes.small
++            visible: deviceRow.busy
++            running: visible
++        }
++        QQC2.Label {
++            visible: deviceRow.mine && !deviceRow.hoveredRow
++            text: deviceRow.modelData.connected ? i18n("Connected") : i18n("Not Connected")
++            opacity: 0.55
++        }
++        QQC2.Button {
++            id: actionButton
++            visible: deviceRow.hoveredRow && !deviceRow.busy
++            text: deviceRow.modelData.connected ? i18n("Disconnect") : i18n("Connect")
++            onClicked: {
++                const d = page.device(deviceRow.modelData.ubi);
++                if (!d) {
++                    return;
++                }
++                if (deviceRow.modelData.connected) {
++                    d.disconnectFromDevice();
++                } else if (deviceRow.modelData.paired) {
++                    d.connectToDevice();
++                } else {
++                    page.connectNew(deviceRow.modelData.ubi);
++                }
++            }
++        }
++        QQC2.ToolButton {
++            id: menuButton
++            visible: deviceRow.mine
++            icon.name: "overflow-menu"
++            display: QQC2.AbstractButton.IconOnly
++            text: i18n("More")
++            onClicked: deviceMenu.popup()
++
++            QQC2.Menu {
++                id: deviceMenu
++                QQC2.MenuItem {
++                    text: i18n("Forget This Device")
++                    onTriggered: {
++                        const d = page.device(deviceRow.modelData.ubi);
++                        if (d && d.adapter) {
++                            d.adapter.removeDevice(d);
++                        }
++                    }
++                }
++            }
++        }
++    }
++}
+diff --git a/app/qml/MacGroup.qml b/app/qml/MacGroup.qml
+new file mode 100644
+index 00000000..b6e8b5b0
+--- /dev/null
++++ b/app/qml/MacGroup.qml
+@@ -0,0 +1,28 @@
++// SPDX-FileCopyrightText: 2026 Brhett
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++import QtQuick
++import QtQuick.Layouts
++import org.kde.kirigami as Kirigami
++
++// MacSettings: one of macOS's rounded groups of rows. Rows go in as
++// children; MacGroupRow draws the hairline above each row but the first.
++Rectangle {
++    id: group
++
++    default property alias rows: column.data
++
++    Layout.fillWidth: true
++    implicitHeight: column.implicitHeight
++    radius: 10
++    color: Kirigami.ColorUtils.linearInterpolation(Kirigami.Theme.backgroundColor, Kirigami.Theme.textColor, 0.05)
++    border.width: 1
++    border.color: Kirigami.ColorUtils.linearInterpolation(Kirigami.Theme.backgroundColor, Kirigami.Theme.textColor, 0.09)
++
++    ColumnLayout {
++        id: column
++        anchors.left: parent.left
++        anchors.right: parent.right
++        spacing: 0
++    }
++}
+diff --git a/app/qml/MacGroupRow.qml b/app/qml/MacGroupRow.qml
+new file mode 100644
+index 00000000..e3d31f58
+--- /dev/null
++++ b/app/qml/MacGroupRow.qml
+@@ -0,0 +1,44 @@
++// SPDX-FileCopyrightText: 2026 Brhett
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++import QtQuick
++import QtQuick.Layouts
++import org.kde.kirigami as Kirigami
++
++// MacSettings: a row in a MacGroup: padding, a hairline above it (unless
++// it's the first), a hover tint when it's clickable.
++MouseArea {
++    id: row
++
++    default property alias content: inner.data
++    property bool first: false
++    property bool clickable: false
++    property real indent: Kirigami.Units.largeSpacing
++
++    Layout.fillWidth: true
++    implicitHeight: Math.max(Kirigami.Units.gridUnit * 2.2, inner.implicitHeight + Kirigami.Units.largeSpacing * 1.5)
++    hoverEnabled: true
++    cursorShape: clickable ? Qt.PointingHandCursor : Qt.ArrowCursor
++
++    Rectangle {
++        anchors.fill: parent
++        anchors.margins: 1
++        radius: 9
++        color: Kirigami.Theme.textColor
++        opacity: row.clickable ? (row.pressed ? 0.1 : row.containsMouse ? 0.05 : 0) : 0
++    }
++    Rectangle {
++        visible: !row.first
++        x: row.indent
++        width: parent.width - x
++        height: 1
++        color: Kirigami.ColorUtils.linearInterpolation(Kirigami.Theme.backgroundColor, Kirigami.Theme.textColor, 0.1)
++    }
++    RowLayout {
++        id: inner
++        anchors.fill: parent
++        anchors.leftMargin: Kirigami.Units.largeSpacing
++        anchors.rightMargin: Kirigami.Units.largeSpacing
++        spacing: Kirigami.Units.largeSpacing
++    }
++}
+diff --git a/app/qml/MacSwitch.qml b/app/qml/MacSwitch.qml
+new file mode 100644
+index 00000000..81bd63cb
+--- /dev/null
++++ b/app/qml/MacSwitch.qml
+@@ -0,0 +1,44 @@
++// SPDX-FileCopyrightText: 2026 Brhett
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++import QtQuick
++import QtQuick.Templates as T
++import org.kde.kirigami as Kirigami
++
++// MacSettings: macOS's switch: a rounded track (the accent blue when on) and
++// a white knob that slides across.
++T.Switch {
++    id: control
++
++    implicitWidth: 38
++    implicitHeight: 22
++    padding: 0
++    hoverEnabled: true
++
++    indicator: Rectangle {
++        width: control.width
++        height: control.height
++        radius: height / 2
++        color: control.checked ? "#315bef"
++             : Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g, Kirigami.Theme.textColor.b, control.hovered ? 0.22 : 0.16)
++        opacity: control.enabled ? 1 : 0.45
++        Behavior on color {
++            ColorAnimation { duration: 150 }
++        }
++
++        Rectangle {
++            width: parent.height - 4
++            height: width
++            radius: width / 2
++            y: 2
++            x: control.checked ? parent.width - width - 2 : 2
++            color: control.pressed ? "#e8e8ec" : "white"
++            border.width: 0.5
++            border.color: Qt.rgba(0, 0, 0, 0.15)
++            Behavior on x {
++                NumberAnimation { duration: 150; easing.type: Easing.OutCubic }
++            }
++        }
++    }
++    contentItem: null
++}
+diff --git a/app/qml/MacWifiPage.qml b/app/qml/MacWifiPage.qml
+new file mode 100644
+index 00000000..98bd5576
+--- /dev/null
++++ b/app/qml/MacWifiPage.qml
+@@ -0,0 +1,336 @@
++// SPDX-FileCopyrightText: 2026 Brhett
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++pragma ComponentBehavior: Bound
++
++import QtQuick
++import QtQuick.Controls as QQC2
++import QtQuick.Layouts
++import org.kde.kirigami as Kirigami
++import org.kde.plasma.networkmanagement as PlasmaNM
++
++// MacSettings: macOS's Wi‑Fi page: Wi‑Fi on or off, the network you're on
++// (Details… opens KDE's full network page), your known networks, and the
++// other networks around, each with Connect. Uses Plasma's network module,
++// like the Network widget; passwords for new networks are asked for by
++// Plasma's network agent.
++ColumnLayout {
++    id: page
++
++    spacing: Kirigami.Units.gridUnit
++
++    // The Wi‑Fi networks, in three lists rebuilt whenever the model changes:
++    // the connected (or connecting) one, the saved ones, the rest.
++    property var current: []
++    property var known: []
++    property var others: []
++
++    function signalIcon(signal) {
++        if (signal >= 80) return "network-wireless-signal-excellent-symbolic";
++        if (signal >= 55) return "network-wireless-signal-good-symbolic";
++        if (signal >= 30) return "network-wireless-signal-ok-symbolic";
++        if (signal > 5) return "network-wireless-signal-weak-symbolic";
++        return "network-wireless-signal-none-symbolic";
++    }
++
++    function rebuild() {
++        const cur = [], kn = [], ot = [];
++        for (let i = 0; i < rows.count; ++i) {
++            const r = rows.objectAt(i);
++            if (!r || r.model.Type !== PlasmaNM.Enums.Wireless) {
++                continue;
++            }
++            const n = {
++                name: r.model.ItemUniqueName,
++                signal: r.model.Signal || 0,
++                secured: r.model.SecurityType !== undefined && r.model.SecurityType > 0,
++                state: r.model.ConnectionState,
++                uuid: r.model.Uuid || "",
++                connectionPath: r.model.ConnectionPath,
++                devicePath: r.model.DevicePath,
++                specificPath: r.model.SpecificPath
++            };
++            if (n.state === PlasmaNM.Enums.Activated || n.state === PlasmaNM.Enums.Activating) {
++                cur.push(n);
++            } else if (n.uuid !== "") {
++                kn.push(n);
++            } else {
++                ot.push(n);
++            }
++        }
++        const bySignal = (a, b) => b.signal - a.signal;
++        kn.sort(bySignal);
++        ot.sort(bySignal);
++        current = cur;
++        known = kn;
++        others = ot;
++    }
++
++    function connect(n) {
++        if (n.uuid !== "") {
++            handler.activateConnection(n.connectionPath, n.devicePath, n.specificPath);
++        } else {
++            handler.addAndActivateConnection(n.devicePath, n.specificPath);
++        }
++    }
++
++    PlasmaNM.Handler {
++        id: handler
++    }
++    PlasmaNM.EnabledConnections {
++        id: enabledConnections
++    }
++    PlasmaNM.NetworkModel {
++        id: networkModel
++    }
++    PlasmaNM.AppletProxyModel {
++        id: networks
++        sourceModel: networkModel
++        onRowsInserted: rebuildTimer.restart()
++        onRowsRemoved: rebuildTimer.restart()
++        onDataChanged: rebuildTimer.restart()
++        onModelReset: rebuildTimer.restart()
++        onLayoutChanged: rebuildTimer.restart()
++    }
++    Instantiator {
++        id: rows
++        model: networks
++        delegate: QtObject {
++            required property var model
++        }
++        onObjectAdded: rebuildTimer.restart()
++        onObjectRemoved: rebuildTimer.restart()
++    }
++    Timer {
++        id: rebuildTimer
++        interval: 50
++        onTriggered: page.rebuild()
++    }
++    // Look for networks while the page is open, as macOS does.
++    Timer {
++        running: enabledConnections.wirelessEnabled && page.visible
++        repeat: true
++        triggeredOnStart: true
++        interval: 10000
++        onTriggered: handler.requestScan()
++    }
++
++    // ---- Wi‑Fi on or off, and the network you're on --------------------------
++    MacGroup {
++        MacGroupRow {
++            first: true
++            implicitHeight: Kirigami.Units.gridUnit * 3.6
++
++            MacTile {
++                glyph: "network-wireless-symbolic"
++                tint: "#0a84ff"
++                size: 36
++            }
++            ColumnLayout {
++                Layout.fillWidth: true
++                spacing: 2
++                QQC2.Label {
++                    text: i18nc("@title", "Wi‑Fi")
++                    font.weight: Font.Bold
++                }
++                QQC2.Label {
++                    Layout.fillWidth: true
++                    text: i18n("Set up Wi‑Fi to connect wirelessly to the internet. Turn on Wi‑Fi, then choose a network to join.")
++                    font: Kirigami.Theme.smallFont
++                    opacity: 0.6
++                    wrapMode: Text.Wrap
++                }
++            }
++            MacSwitch {
++                checked: enabledConnections.wirelessEnabled
++                enabled: enabledConnections.wirelessHwEnabled
++                onToggled: handler.enableWireless(checked)
++            }
++        }
++
++        Repeater {
++            model: enabledConnections.wirelessEnabled ? page.current : []
++            delegate: MacGroupRow {
++                id: currentRow
++                required property var modelData
++                readonly property bool connecting: modelData.state === PlasmaNM.Enums.Activating
++
++                Item {
++                    Layout.preferredWidth: 36
++                    Layout.preferredHeight: 1
++                }
++                ColumnLayout {
++                    Layout.fillWidth: true
++                    spacing: 1
++                    QQC2.Label {
++                        Layout.fillWidth: true
++                        text: currentRow.modelData.name
++                        font.weight: Font.DemiBold
++                        elide: Text.ElideRight
++                    }
++                    RowLayout {
++                        spacing: 5
++                        Rectangle {
++                            width: 7
++                            height: 7
++                            radius: 3.5
++                            color: currentRow.connecting ? "#ff9f0a" : "#30d158"
++                        }
++                        QQC2.Label {
++                            text: currentRow.connecting ? i18n("Connecting…") : i18n("Connected")
++                            font: Kirigami.Theme.smallFont
++                            opacity: 0.6
++                        }
++                    }
++                }
++                NetworkIcons {
++                    signal: currentRow.modelData.signal
++                    secured: currentRow.modelData.secured
++                }
++                QQC2.Button {
++                    text: i18n("Details…")
++                    onClicked: systemsettings.openFromLanding("kcm_networkmanagement")
++                }
++            }
++        }
++    }
++
++    // ---- Known Networks -----------------------------------------------------
++    SectionTitle {
++        visible: enabledConnections.wirelessEnabled && page.known.length > 0
++        text: i18n("Known Networks")
++    }
++    MacGroup {
++        visible: enabledConnections.wirelessEnabled && page.known.length > 0
++        Repeater {
++            model: page.known
++            delegate: NetworkRow {
++                known: true
++            }
++        }
++    }
++
++    // ---- Other Networks -----------------------------------------------------
++    RowLayout {
++        visible: enabledConnections.wirelessEnabled
++        spacing: Kirigami.Units.smallSpacing
++        SectionTitle {
++            text: i18n("Other Networks")
++        }
++        QQC2.BusyIndicator {
++            Layout.preferredWidth: Kirigami.Units.iconSizes.small
++            Layout.preferredHeight: Kirigami.Units.iconSizes.small
++            running: handler.scanning
++            visible: running
++        }
++        Item {
++            Layout.fillWidth: true
++        }
++    }
++    MacGroup {
++        visible: enabledConnections.wirelessEnabled
++        Repeater {
++            model: page.others
++            delegate: NetworkRow {}
++        }
++        MacGroupRow {
++            first: true
++            visible: page.others.length === 0
++            QQC2.Label {
++                Layout.fillWidth: true
++                text: handler.scanning ? i18n("Looking for networks…") : i18n("No other networks found")
++                opacity: 0.55
++            }
++        }
++    }
++
++    RowLayout {
++        Layout.fillWidth: true
++        Item {
++            Layout.fillWidth: true
++        }
++        QQC2.Button {
++            text: i18n("Advanced…")
++            onClicked: systemsettings.openFromLanding("kcm_networkmanagement")
++        }
++    }
++
++    // ---- pieces -------------------------------------------------------------
++
++    component SectionTitle: QQC2.Label {
++        Layout.leftMargin: Kirigami.Units.smallSpacing
++        Layout.topMargin: Kirigami.Units.smallSpacing
++        font.weight: Font.Bold
++    }
++
++    // The lock (if secured) and the signal strength, on the right of a row.
++    component NetworkIcons: RowLayout {
++        property int signal: 0
++        property bool secured: false
++        spacing: Kirigami.Units.smallSpacing
++        Kirigami.Icon {
++            Layout.preferredWidth: 14
++            Layout.preferredHeight: 14
++            visible: parent.secured
++            source: "object-locked-symbolic"
++            isMask: true
++            color: Kirigami.Theme.textColor
++            opacity: 0.6
++        }
++        Kirigami.Icon {
++            Layout.preferredWidth: 16
++            Layout.preferredHeight: 16
++            source: page.signalIcon(parent.signal)
++            isMask: true
++            color: Kirigami.Theme.textColor
++        }
++    }
++
++    // A network you could join: Connect appears on hover (always for known
++    // networks' "…" menu), as on macOS.
++    component NetworkRow: MacGroupRow {
++        id: networkRow
++        required property var modelData
++        required property int index
++        property bool known: false
++        readonly property bool showConnect: containsMouse || connectButton.hovered
++
++        first: index === 0
++
++        QQC2.Label {
++            Layout.fillWidth: true
++            text: networkRow.modelData.name
++            elide: Text.ElideRight
++        }
++        QQC2.Button {
++            id: connectButton
++            text: i18n("Connect")
++            opacity: networkRow.showConnect ? 1 : 0
++            enabled: networkRow.showConnect
++            onClicked: page.connect(networkRow.modelData)
++        }
++        NetworkIcons {
++            signal: networkRow.modelData.signal
++            secured: networkRow.modelData.secured
++        }
++        QQC2.ToolButton {
++            visible: networkRow.known
++            icon.name: "overflow-menu"
++            display: QQC2.AbstractButton.IconOnly
++            text: i18n("More")
++            onClicked: knownMenu.popup()
++
++            QQC2.Menu {
++                id: knownMenu
++                QQC2.MenuItem {
++                    text: i18n("Connect")
++                    onTriggered: page.connect(networkRow.modelData)
++                }
++                QQC2.MenuItem {
++                    text: i18n("Forget This Network")
++                    onTriggered: handler.removeConnection(networkRow.modelData.connectionPath)
++                }
++            }
++        }
++    }
++}
+diff --git a/app/qml/Main.qml b/app/qml/Main.qml
+index f0513e59..700178e5 100644
+--- a/app/qml/Main.qml
++++ b/app/qml/Main.qml
+@@ -54,7 +54,7 @@ Item {
+ 
+     function open(entry) {
+         selectedKey = entry.key;
+-        if (entry.modules.length === 1) {
++        if (entry.modules.length === 1 && !entry.page) {
+             systemsettings.openModule(entry.modules[0]);
+         } else {
+             systemsettings.openLanding({
+@@ -63,6 +63,7 @@ Item {
+                 glyph: entry.glyph,
+                 color: entry.color,
+                 sections: entry.sections,
++                page: entry.page || "",
+                 pageNames: Entries.pageNames
+             });
+         }
+@@ -96,6 +97,11 @@ Item {
+         running: true
+         interval: 0
+         onTriggered: {
++            const test = root.entries.find(e => e.key === systemsettings.testEntry());
++            if (test) {
++                root.open(test);
++                return;
++            }
+             const id = systemsettings.activeModuleId;
+             if (id === "" || id === "kcm_landingpage") {
+                 const general = root.entries.find(e => e.key === "general");
+-- 
+2.56.0
+

@@ -1,0 +1,24 @@
+From 07829682fbaac247fe8d5133176276bdb564204d Mon Sep 17 00:00:00 2001
+From: jingledingle521 <36874370+jingledingle521@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 20:57:00 -0500
+Subject: [PATCH 5/6] README: the repo is now mac-settings-kde
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ README.md | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/README.md b/README.md
+index 1a4e50d0..10e03bac 100644
+--- a/README.md
++++ b/README.md
+@@ -1,4 +1,4 @@
+-# settings-kde
++# mac-settings-kde
+ 
+ **Mac Settings for KDE Plasma**: KDE's
+ [System Settings](https://invent.kde.org/plasma/systemsettings) laid out
+-- 
+2.56.0
+
