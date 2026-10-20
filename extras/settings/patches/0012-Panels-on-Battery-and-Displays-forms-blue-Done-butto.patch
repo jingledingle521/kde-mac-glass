@@ -1,0 +1,81 @@
+From 5f8e3c58827189e66a1917e3dc2009757a78855d Mon Sep 17 00:00:00 2001
+From: jingledingle521 <36874370+jingledingle521@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 20:56:28 -0500
+Subject: [PATCH 12/12] Panels on Battery and Displays forms, blue Done button
+
+Forms built as a page's own component on Kirigami.FormLayout (Battery's
+ProfileConfig, Displays' OutputPanel) now get macOS panels; hidden
+messages between rows no longer split a panel. Highlighted buttons are
+marked as default buttons so the style draws them blue.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ app/ModuleView.cpp         |  8 +++++++-
+ app/qml/MacFormPanels.qml  | 11 +++++++++--
+ app/qml/MacWifiDetails.qml |  1 +
+ 3 files changed, 17 insertions(+), 3 deletions(-)
+
+diff --git a/app/ModuleView.cpp b/app/ModuleView.cpp
+index 8d6cdcbd..76cc2997 100644
+--- a/app/ModuleView.cpp
++++ b/app/ModuleView.cpp
+@@ -974,7 +974,13 @@ void ModuleView::decorateWidgetForms(QWidget *page)
+ void ModuleView::decorateForms(QQuickItem *item)
+ {
+     for (QQuickItem *child : item->childItems()) {
+-        if (QByteArray(child->metaObject()->className()).startsWith("FormLayout") && !child->property("_macForm").toBool()) {
++        // A FormLayout, or a page's own component built on one (Battery's
++        // ProfileConfig, Displays' OutputPanel).
++        bool isForm = false;
++        for (const QMetaObject *meta = child->metaObject(); meta && !isForm; meta = meta->superClass()) {
++            isForm = QByteArray(meta->className()).startsWith("FormLayout");
++        }
++        if (isForm && !child->property("_macForm").toBool()) {
+             // The form's hidden helper (its second child) sits at its
+             // top-left outside its grid: the panels go in there, below the rows.
+             const QList<QQuickItem *> parts = child->childItems();
+diff --git a/app/qml/MacFormPanels.qml b/app/qml/MacFormPanels.qml
+index 0c00ea6e..c686739d 100644
+--- a/app/qml/MacFormPanels.qml
++++ b/app/qml/MacFormPanels.qml
+@@ -55,7 +55,10 @@ Item {
+                 // The section's own row (a separator, or an empty item).
+                 child.Layout.topMargin = pad;
+                 child.Layout.bottomMargin = pad;
+-                if (item.Kirigami.FormData.label.length === 0) {
++                // A bare break (a separator or empty item) shows as the
++                // gap; a message placed as a section (Battery's warnings)
++                // stays.
++                if (item.Kirigami.FormData.label.length === 0 && !(item instanceof Kirigami.InlineMessage)) {
+                     item.opacity = 0;
+                 }
+             }
+@@ -85,7 +88,11 @@ Item {
+                 continue;
+             }
+             if (isSection(item)) {
+-                current = null;
++                // A hidden message between rows (Battery's warnings) doesn't
++                // break the panel.
++                if (item.visible || item.Kirigami.FormData.label.length > 0) {
++                    current = null;
++                }
+                 continue;
+             }
+             if (!item.visible || item.height <= 0) {
+diff --git a/app/qml/MacWifiDetails.qml b/app/qml/MacWifiDetails.qml
+index f132850e..593876bb 100644
+--- a/app/qml/MacWifiDetails.qml
++++ b/app/qml/MacWifiDetails.qml
+@@ -214,6 +214,7 @@ QQC2.Popup {
+             QQC2.Button {
+                 text: i18n("Done")
+                 highlighted: true
++                Accessible.defaultButton: true
+                 onClicked: sheet.close()
+             }
+         }
+-- 
+2.56.0
+

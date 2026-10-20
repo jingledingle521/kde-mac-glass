@@ -1,7 +1,7 @@
 From 4011a339b4a5e6f48dfd5b11247c8ec7f1ba4168 Mon Sep 17 00:00:00 2001
 From: jingledingle521 <36874370+jingledingle521@users.noreply.github.com>
 Date: Sun, 18 Oct 2026 21:17:15 -0500
-Subject: [PATCH 10/11] Mac Settings: Stoplights back to the window decorations
+Subject: [PATCH 10/12] Mac Settings: Stoplights back to the window decorations
  size
 
 14.5 px circles 8.8 px apart, as every other window (the 16 px ones read
