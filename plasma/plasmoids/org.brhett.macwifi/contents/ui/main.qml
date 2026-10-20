@@ -49,7 +49,18 @@ PlasmoidItem {
     compactRepresentation: MouseArea {
         property bool wasExpanded: false
 
-        Layout.minimumWidth: Kirigami.Units.iconSizes.small + Kirigami.Units.smallSpacing * 2
+        // NetworkManager's icon name says the state: network-wireless-<0-100>
+        // (-connected-<n> while connecting, -locked, -limited), -disconnected,
+        // network-wired-*, network-unavailable, network-flightmode-on.
+        readonly property string iconName: connectionIcon.connectionIcon
+        readonly property bool wired: iconName.startsWith("network-wired") && iconName !== "network-wired-disconnected"
+        readonly property bool drawn: !wired && /^network-(wireless|unavailable|flightmode|wired-disconnected)/.test(iconName)
+        readonly property int strength: {
+            const m = iconName.match(/^network-wireless-(?:connected-)?(\d+)/);
+            return m ? Number(m[1]) : 0;
+        }
+
+        Layout.minimumWidth: (drawn ? glyph.implicitWidth : Kirigami.Units.iconSizes.small) + Kirigami.Units.smallSpacing * 2
         Layout.maximumWidth: Layout.minimumWidth
         Layout.fillHeight: true
         hoverEnabled: true
@@ -57,11 +68,24 @@ PlasmoidItem {
         onPressed: wasExpanded = root.expanded
         onClicked: root.expanded = !wasExpanded
 
+        WifiGlyph {
+            id: glyph
+            anchors.centerIn: parent
+            width: implicitWidth
+            height: implicitHeight
+            visible: parent.drawn
+            off: !enabledConnections.wirelessEnabled || /unavailable|flightmode/.test(parent.iconName)
+            connecting: connectionIcon.connecting
+            bars: parent.strength >= 70 ? 3 : parent.strength >= 35 ? 2 : parent.strength > 0 ? 1 : 0
+        }
+
+        // Wired, mobile and VPN keep the icon theme's glyph.
         Kirigami.Icon {
             anchors.centerIn: parent
             width: Kirigami.Units.iconSizes.small
             height: width
-            source: connectionIcon.connectionIcon
+            visible: !parent.drawn
+            source: visible ? parent.iconName : ""
             active: parent.containsMouse
         }
     }

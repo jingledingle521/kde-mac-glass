@@ -164,29 +164,10 @@ PlasmoidItem {
         onPressed: wasExpanded = root.expanded
         onClicked: root.expanded = !wasExpanded
 
-        Column {
+        ControlGlyph {
             anchors.centerIn: parent
-            spacing: Math.round(Kirigami.Units.iconSizes.small * 0.14)
-            Repeater {
-                model: [false, true]
-                delegate: Rectangle {
-                    required property bool modelData
-                    width: Kirigami.Units.iconSizes.small
-                    height: Math.round(width * 0.42)
-                    radius: height / 2
-                    color: "transparent"
-                    border.color: Kirigami.Theme.textColor
-                    border.width: Math.max(1, Math.round(width / 14))
-                    Rectangle {
-                        width: parent.height - parent.border.width * 2 - 2
-                        height: width
-                        radius: width / 2
-                        anchors.verticalCenter: parent.verticalCenter
-                        x: parent.modelData ? parent.width - width - parent.border.width - 1 : parent.border.width + 1
-                        color: Kirigami.Theme.textColor
-                    }
-                }
-            }
+            width: implicitWidth
+            height: implicitHeight
         }
     }
 

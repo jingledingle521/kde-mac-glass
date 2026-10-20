@@ -94,7 +94,7 @@ PlasmoidItem {
     compactRepresentation: MouseArea {
         property bool wasExpanded: false
 
-        Layout.minimumWidth: Kirigami.Units.iconSizes.small + Kirigami.Units.smallSpacing * 2
+        Layout.minimumWidth: speaker.implicitWidth + Kirigami.Units.smallSpacing * 2
         Layout.maximumWidth: Layout.minimumWidth
         Layout.fillHeight: true
         acceptedButtons: Qt.LeftButton | Qt.MiddleButton
@@ -111,12 +111,13 @@ PlasmoidItem {
         }
         onWheel: wheel => root.setPercent(root.percent + (wheel.angleDelta.y > 0 ? 5 : -5))
 
-        Kirigami.Icon {
+        SpeakerGlyph {
+            id: speaker
             anchors.centerIn: parent
-            width: Kirigami.Units.iconSizes.small
-            height: width
-            source: Plasmoid.icon
-            active: parent.containsMouse
+            width: implicitWidth
+            height: implicitHeight
+            percent: root.percent
+            muted: !root.hasSink || root.sink.muted
         }
     }
 
