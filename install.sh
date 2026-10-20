@@ -79,6 +79,14 @@ cp "$here/extras/vivaldi-menu/vivaldi-menu-bridge.service" "$config/systemd/user
 systemctl --user daemon-reload
 systemctl --user enable --now vivaldi-menu-bridge.service >/dev/null 2>&1 || true
 
+# Plasma ignores the accent colour for a style with its own colours; this
+# watcher gives MacGlass the accent whenever it changes (and now).
+install -m 755 "$here/extras/accent/macglass-accent" "$HOME/.local/bin/macglass-accent"
+cp "$here/extras/accent/macglass-accent.path" "$here/extras/accent/macglass-accent.service" "$config/systemd/user/"
+systemctl --user daemon-reload
+systemctl --user enable --now macglass-accent.path >/dev/null 2>&1 || true
+"$HOME/.local/bin/macglass-accent" || true
+
 if [ $icons = 1 ]; then
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
@@ -161,6 +169,8 @@ if [ $apply = 1 ]; then
     kwriteconfig6 --file kdeglobals --group General --key toolBarFont "Inter,10,-1,5,400,0,0,0,0,0,0,0,0,0,0,1"
     kwriteconfig6 --file kdeglobals --group General --key smallestReadableFont "Inter,8,-1,5,400,0,0,0,0,0,0,0,0,0,0,1"
     kwriteconfig6 --file kdeglobals --group WM --key activeFont "Inter,10,-1,5,600,0,0,0,0,0,0,0,0,0,0,1"
+    # The Apple menu's blue as the accent (Appearance changes it).
+    plasma-apply-colorscheme --accent-color "#315bef" >/dev/null || true
     # The global theme sets Breeze; keep the Mac menus/controls if built.
     if [ -f "$HOME/.local/lib64/qt6/plugins/styles/libmacglass.so" ]; then
         kwriteconfig6 --file kdeglobals --group KDE --key widgetStyle MacGlass

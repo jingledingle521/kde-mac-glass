@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch the accent colour for the MacGlass Plasma style
+
+[Path]
+PathChanged=%h/.config/kdeglobals
+Unit=macglass-accent.service
+
+[Install]
+WantedBy=default.target

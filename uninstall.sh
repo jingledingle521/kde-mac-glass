@@ -17,12 +17,17 @@ rm -rf "$data/plasma/desktoptheme/MacGlass" \
        "${XDG_CACHE_HOME:-$HOME/.cache}/mac-glass-kde/settings-src" \
        "${XDG_CACHE_HOME:-$HOME/.cache}/mac-glass-kde/finder-src" \
        "$data"/plasma/plasmoids/org.brhett.{activeapp,applemenu,menubar,controlcenter,macbattery,macclipboard,macdock,macnotifications,macnowplaying,macsound,macwifi}
+systemctl --user disable --now macglass-accent.path >/dev/null 2>&1 || true
 rm -f "$config/systemd/user/plasma-kwin_wayland.service.d/goldengate-lockscreen.conf" \
       "$config/systemd/user/plasma-plasmashell.service.d/small-tray-icons.conf" \
       "$HOME/.local/bin/patch-tray-icons" \
       "$data/applications/org.brhett.finder.desktop" \
       "$HOME/.local/bin/vivaldi-menu-bridge" \
       "$config/systemd/user/vivaldi-menu-bridge.service" \
+      "$HOME/.local/bin/macglass-accent" \
+      "$config/systemd/user/macglass-accent.path" \
+      "$config/systemd/user/macglass-accent.service" \
+      "$config/systemd/user/default.target.wants/macglass-accent.path" \
       "$HOME/.local/lib64/qt6/plugins/plasma/applets/org.kde.plasma.systemtray.so" \
       "$HOME/.local/lib64/qt6/plugins/plasma/applets/org.kde.plasma.systemtray.so.source-sha256" \
       "$config/systemd/user/plasma-plasmashell.service.d/macdock-qml.conf" \

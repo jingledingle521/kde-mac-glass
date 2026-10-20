@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Plasma ignores the accent colour (System Settings → Appearance) for a Plasma
+# style that brings its own colours, as MacGlass does. This copies the accent
+# from kdeglobals (where KDE keeps it as the focus colour) into MacGlass's
+# colours, as its selection and focus colours, then has Plasma reread them.
+# Run by macglass-accent.path whenever kdeglobals changes.
+set -eu
+
+theme=${XDG_DATA_HOME:-$HOME/.local/share}/plasma/desktoptheme/MacGlass/colors
+[ -f "$theme" ] || exit 0
+
+accent=$(kreadconfig6 --file kdeglobals --group Colors:Window --key DecorationFocus)
+[ -n "$accent" ] || exit 0
+
+changed=0
+# set GROUP KEY: the accent, if the theme has another colour there.
+set_accent() {
+    if [ "$(kreadconfig6 --file "$theme" --group "$1" --key "$2")" != "$accent" ]; then
+        kwriteconfig6 --file "$theme" --group "$1" --key "$2" "$accent"
+        changed=1
+    fi
+}
+
+set_accent Colors:Selection BackgroundNormal
+set_accent Colors:Selection BackgroundAlternate
+for set in Window View Button Header Tooltip Complementary; do
+    set_accent "Colors:$set" DecorationFocus
+    set_accent "Colors:$set" DecorationHover
+done
+
+if [ $changed = 1 ]; then
+    # Plasma rereads its style's colours when the palette changes.
+    rm -f "$HOME"/.cache/plasma_theme_MacGlass*.kcache
+    dbus-send --session --type=signal /KGlobalSettings org.kde.KGlobalSettings.notifyChange int32:0 int32:0
+fi

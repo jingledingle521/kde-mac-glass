@@ -1,0 +1,6 @@
+[Unit]
+Description=Give the MacGlass Plasma style the accent colour
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/macglass-accent

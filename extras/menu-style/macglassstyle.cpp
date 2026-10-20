@@ -1,18 +1,18 @@
 // MacGlass widget style: Breeze, with macOS's menus and controls.
 //
 // Menus are drawn like macOS menus: a rounded frosted-glass panel (KWin
-// blurs behind it), items inset from the edge with a rounded blue highlight,
+// blurs behind it), items inset from the edge with a rounded accent highlight,
 // a checkmark column, shortcuts as Mac symbols (⇧⌘C) and thin inset
 // separators. The colours match the Menu Bar widget and the MacGlass
 // Kvantum menus.
 //
 // Push buttons, checkboxes, radio buttons, pop-up buttons (non-editable
 // combo boxes) and sliders are drawn like macOS's: soft rounded fills, the
-// accent blue for checked and default, a pop-up button's blue chevron box,
-// a slider's thin track and white knob; tab bars along the top are a
-// segmented control over a rounded panel; group boxes are macOS's grouped
-// panels with a small bold title above, at the left. Everything else is
-// Breeze. QML apps
+// accent colour (Appearance's) for checked and default, a pop-up button's
+// chevron box in it, a slider's thin track and white knob; tab bars along
+// the top are a segmented control over a rounded panel; group boxes are
+// macOS's grouped panels with a small bold title above, at the left.
+// Everything else is Breeze. QML apps
 // using the desktop Qt Quick Controls style get the same, since that style
 // paints through the widget style.
 //
@@ -31,6 +31,8 @@
 #include <QPointer>
 #include <QProxyStyle>
 #include <QRegularExpression>
+#include <QSettings>
+#include <QStandardPaths>
 #include <QStyleFactory>
 #include <QStyleOptionMenuItem>
 #include <QStyleOptionButton>
@@ -59,8 +61,6 @@ constexpr int SeparatorHeight = 11;
 constexpr int ShadowSize = 22;
 constexpr int ShadowOffset = 5; // the shadow falls a little lower
 
-const QColor Highlight(49, 91, 239); // the Apple menu's hover blue
-const QColor Accent = Highlight; // checked boxes, default buttons, sliders
 constexpr qreal ControlRadius = 5;
 constexpr int GroupRadius = 10;
 constexpr int GroupTitleGap = 6; // between a group's title and its panel
@@ -70,6 +70,31 @@ constexpr int GroupTitleSpace = 8; // above a group's title, apart from the grou
 bool isDark(const QPalette &palette)
 {
     return palette.color(QPalette::Window).lightnessF() < 0.5;
+}
+
+// The accent (Appearance's colour): menu highlights, checked boxes, default
+// buttons, pop-up buttons and sliders. KDE keeps it as the focus colour in
+// kdeglobals; the palette's selection colour is a darker shade of it in dark
+// mode (kept for selected rows, as on macOS). Reread when that changes, and
+// the selection colour itself without KDE's settings.
+QColor accentColor(const QPalette &palette)
+{
+    static QRgb seen = 0;
+    static QColor accent;
+    const QColor highlight = palette.color(QPalette::Active, QPalette::Highlight);
+    if (highlight.rgb() != seen || !accent.isValid()) {
+        seen = highlight.rgb();
+        accent = highlight;
+        const QString path = QStandardPaths::locate(QStandardPaths::GenericConfigLocation, QStringLiteral("kdeglobals"));
+        if (!path.isEmpty()) {
+            const QStringList rgb = QSettings(path, QSettings::IniFormat).value(QStringLiteral("Colors:Window/DecorationFocus")).toStringList();
+            if (rgb.size() == 3) {
+                accent = QColor(rgb[0].toInt(), rgb[1].toInt(), rgb[2].toInt());
+            }
+        }
+        accent.setAlpha(255);
+    }
+    return accent;
 }
 
 QColor withAlpha(QColor color, qreal alpha)
@@ -620,7 +645,8 @@ private:
         }
         QColor fill;
         if (accent && enabled) {
-            fill = pressed ? Accent.darker(115) : hover ? Accent.lighter(108) : Accent;
+            const QColor accent = accentColor(option->palette);
+            fill = pressed ? accent.darker(115) : hover ? accent.lighter(108) : accent;
         } else if (dark) {
             fill = QColor(255, 255, 255, !enabled ? 14 : pressed ? 58 : hover ? 42 : 33);
         } else {
@@ -652,7 +678,7 @@ private:
 
         if (on || partial) {
             painter->setPen(Qt::NoPen);
-            painter->setBrush(enabled ? Accent : withAlpha(Accent, 0.4));
+            painter->setBrush(enabled ? accentColor(option->palette) : withAlpha(accentColor(option->palette), 0.4));
             painter->drawPath(roundedRect(r, 3.5));
             QPen pen(withAlpha(Qt::white, enabled ? 1 : 0.6), 1.7);
             pen.setCapStyle(Qt::RoundCap);
@@ -685,7 +711,7 @@ private:
         const QRectF box(QRectF(option->rect).center() - QPointF(size / 2, size / 2), QSizeF(size, size));
         if (on) {
             painter->setPen(Qt::NoPen);
-            painter->setBrush(enabled ? Accent : withAlpha(Accent, 0.4));
+            painter->setBrush(enabled ? accentColor(option->palette) : withAlpha(accentColor(option->palette), 0.4));
             painter->drawEllipse(box.adjusted(0.5, 0.5, -0.5, -0.5));
             painter->setBrush(Qt::white);
             painter->drawEllipse(box.center(), 2.6, 2.6);
@@ -708,7 +734,7 @@ private:
         const QRectF box(qMin<qreal>(arrow.center().x() - side / 2, bevel.right() - 2.5 - side), bevel.center().y() - side / 2, side, side);
         const bool enabled = combo->state & State_Enabled;
         painter->setPen(Qt::NoPen);
-        painter->setBrush(enabled ? Accent : withAlpha(Accent, 0.35));
+        painter->setBrush(enabled ? accentColor(combo->palette) : withAlpha(accentColor(combo->palette), 0.35));
         painter->drawPath(roundedRect(box, 3.5));
         QPen pen(withAlpha(Qt::white, enabled ? 1 : 0.6), 1.4);
         pen.setCapStyle(Qt::RoundCap);
@@ -770,7 +796,7 @@ private:
                 filled.setTop(knob.y());
             }
         }
-        painter->setBrush(enabled ? Accent : withAlpha(Accent, 0.35));
+        painter->setBrush(enabled ? accentColor(slider->palette) : withAlpha(accentColor(slider->palette), 0.35));
         painter->drawPath(roundedRect(filled, thickness / 2));
 
         if (slider->subControls & SC_SliderHandle) {
@@ -848,7 +874,7 @@ private:
         const bool selected = enabled && (item->state & State_Selected);
         if (selected) {
             painter->setPen(Qt::NoPen);
-            painter->setBrush(Highlight);
+            painter->setBrush(accentColor(palette));
             painter->drawPath(roundedRect(QRectF(rect), ItemRadius));
         }
 

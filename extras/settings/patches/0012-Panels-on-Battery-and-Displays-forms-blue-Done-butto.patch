@@ -1,7 +1,7 @@
 From 5f8e3c58827189e66a1917e3dc2009757a78855d Mon Sep 17 00:00:00 2001
 From: jingledingle521 <36874370+jingledingle521@users.noreply.github.com>
 Date: Mon, 19 Oct 2026 20:56:28 -0500
-Subject: [PATCH 12/12] Panels on Battery and Displays forms, blue Done button
+Subject: [PATCH 12/13] Panels on Battery and Displays forms, blue Done button
 
 Forms built as a page's own component on Kirigami.FormLayout (Battery's
 ProfileConfig, Displays' OutputPanel) now get macOS panels; hidden
