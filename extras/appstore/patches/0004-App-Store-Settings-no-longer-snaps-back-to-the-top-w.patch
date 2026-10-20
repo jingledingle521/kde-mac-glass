@@ -1,0 +1,66 @@
+From 4eac9c0382ec1e3a6ba887f26c3157dab0e10b3a Mon Sep 17 00:00:00 2001
+From: jingledingle521 <36874370+jingledingle521@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 11:57:23 -0500
+Subject: [PATCH 4/4] App Store: Settings no longer snaps back to the top while
+ scrolling
+
+The list was held at its top until a drag, but wheel scrolling moves it
+without one, and rows re-measured while scrolling moved its origin: each
+time it jumped back. Hold it only while the sources load (until rows
+stop arriving for 1.5 s), and let any scroll release it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ discover/qml/SourcesPage.qml | 34 ++++++++++++++++++++++++----------
+ 1 file changed, 24 insertions(+), 10 deletions(-)
+
+diff --git a/discover/qml/SourcesPage.qml b/discover/qml/SourcesPage.qml
+index 8ee4fcceb..9715f6ca5 100644
+--- a/discover/qml/SourcesPage.qml
++++ b/discover/qml/SourcesPage.qml
+@@ -78,17 +78,31 @@ DiscoverPage {
+ 
+         model: Discover.SourcesModel
+         Component.onCompleted: Qt.callLater(Discover.SourcesModel.showingNow)
+-        // App Store: start at the title while the sources load, not wherever
+-        // the rows settle; until the user scrolls.
+-        property bool userScrolled: false
+-        onMovementStarted: userScrolled = true
+-        // (Sources load above the first ones too, and the list keeps what's
+-        // on screen in place by moving its origin.)
+-        onOriginYChanged: if (!userScrolled) {
+-            contentY = originY;
++        // App Store: start at the top while the sources load, not wherever
++        // the rows settle. Sources load above the first ones too, and the
++        // list keeps what's on screen in place by moving its origin. Only
++        // while loading (until the rows stop arriving), and never once the
++        // user has scrolled: by wheel too, which moves contentY directly.
++        property bool pinnedToTop: true
++        function keepAtTop() {
++            if (pinnedToTop && contentY !== originY) {
++                contentY = originY;
++            }
++        }
++        onOriginYChanged: keepAtTop()
++        onContentHeightChanged: keepAtTop()
++        onCountChanged: if (pinnedToTop) {
++            settleTimer.restart();
++        }
++        onMovementStarted: pinnedToTop = false
++        onContentYChanged: if (Math.abs(contentY - originY) > 1) {
++            pinnedToTop = false;
+         }
+-        onContentHeightChanged: if (!userScrolled) {
+-            contentY = originY;
++        Timer {
++            id: settleTimer
++            interval: 1500
++            running: true
++            onTriggered: sourcesView.pinnedToTop = false
+         }
+         currentIndex: -1
+         pixelAligned: true
+-- 
+2.56.0
+
