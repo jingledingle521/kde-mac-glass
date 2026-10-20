@@ -1,0 +1,125 @@
+From f7b8785d4ddc7e8c39c78a495608810b66134932 Mon Sep 17 00:00:00 2001
+From: jingledingle521 <36874370+jingledingle521@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 11:26:23 -0500
+Subject: [PATCH 3/3] README: the repo is mac-app-store-kde
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ README.md | 92 +++++++++++++++++++++++++++++++++++++++----------------
+ 1 file changed, 65 insertions(+), 27 deletions(-)
+
+diff --git a/README.md b/README.md
+index 841055837..cc607f5da 100644
+--- a/README.md
++++ b/README.md
+@@ -1,41 +1,79 @@
+-# Discover
++# mac-app-store-kde
+ 
+-Discover helps you find and install applications, games, and tools. You can search or browse by category, and look at screenshots and read reviews to help you pick the perfect app.
++**App Store for KDE Plasma**: KDE's
++[Discover](https://invent.kde.org/plasma/discover) laid out and styled like
++macOS's App Store.
+ 
+-![Discover window](https://cdn.kde.org/screenshots/plasma-discover/plasma-discover.png)
++Based on Discover 6.7.5. Every change is a commit on top of the `v6.7.5`
++tag, and the upstream code is marked `App Store:` where it was changed. The
++backends (PackageKit, Flatpak, firmware, Plasma add-ons) are Discover's own,
++so it installs, updates and removes the same software stock Discover does.
+ 
+-## Features
++## What's different from Discover
+ 
+-* Install and download software.
+-* Manage software sources, e.g. Flatpak repositories.
+-* Upgrade operating system software through PackageKit.
+-* Find and install add-ons for Plasma.
++- **Window**: frameless, rounded, with stoplights (close, minimize, zoom)
++  in the corner, a native shadow, and a translucent glass sidebar that runs
++  to the top of the window. Drag empty space at the top to move;
++  double-click to zoom.
++- **Sidebar**: a search field, then Discover, Create, Work, Play, Develop
++  (KDE's Graphics, Office, Games and Development categories), Categories and
++  Updates with a count badge; your account at the bottom (your installed
++  apps), with Settings beside it. The selection follows whatever page is
++  open, however it was opened.
++- **Discover**: a large title, a row of big feature cards (screenshot, name,
++  Get button), then shelves of apps in columns: Most Popular, New &
++  Updated, Top Games, Create, Work, Developer Tools, each with See All.
++- **Get button**: a capsule reading GET or OPEN; while installing, a ring
++  filling up around a stop square (click to cancel).
++- **App pages**: a big icon, name, description and developer, a filled GET
++  button with Uninstall behind ⋯, and a strip of Ratings, Age, Size,
++  Developer, License and Version above the screenshots.
++- **Categories, search and Your Apps**: a large title and apps in columns;
++  Categories is a grid of coloured tiles.
++- **Updates**: "Available" with the count and size and an Update All pill.
++- **Settings** (sources): grouped panels with switches, actions behind ⋯.
++- **Icons**: taken from your icon theme by the app's id when it has one, so
++  a macOS-styled theme (WhiteSur) restyles them like the dock.
++- Colours follow your accent colour.
+ 
+-## Support
++The macOS controls come from the MacGlass widget style in
++[kde-mac-glass](https://github.com/jingledingle521/kde-mac-glass), which this
++is part of.
+ 
+-If you have an issue with Discover, please [open a support thread on KDE Discuss](https://discuss.kde.org/c/help/6).
++## Install
+ 
+-## Building
+-
+-The easiest way to make changes and test Discover during development is to [build it with kde-builder](https://community.kde.org/Get_Involved/development).
++```sh
++sudo dnf builddep plasma-discover            # first time (Fedora)
++cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
++      -DCMAKE_INSTALL_PREFIX=$HOME/.local/opt/appstore -DBUILD_TESTING=OFF
++ninja -C build install
++```
+ 
+-## Vendor Customization
++It installs next to the stock app. To have the desktop open it (the
++launcher, update notifications), put a `plasma-discover` ahead of
++`/usr/bin` in your `PATH`; it needs the backends' plugin folder:
+ 
+-Want to change the apps featured in the Editor's Choice section? Add a configuration file named `/usr/share/discover/featuredurlrc` that points to a JSON file patterned off the default one present at https://autoconfig.kde.org/discover/featured-5.9.json:
+-```toml
+-[Software]
+-FeaturedListingURL="https://your-url-here/file.json"
++```sh
++cat > ~/.local/bin/plasma-discover <<'EOF'
++#!/bin/sh
++QT_PLUGIN_PATH="$HOME/.local/opt/appstore/lib64/plugins${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}" \
++    exec "$HOME/.local/opt/appstore/bin/plasma-discover" "$@"
++EOF
++chmod +x ~/.local/bin/plasma-discover
+ ```
+ 
+-## Contributing
+-
+-Like other projects in the KDE ecosystem, contributions are welcome from all. This repository is managed in [KDE Invent](https://invent.kde.org/plasma/discover), our GitLab instance.
++Delete that file to go back to the stock app. kde-mac-glass's
++`./install.sh --appstore` does all of this and names the menu entry
++"App Store".
+ 
+-* Want to contribute code? See the [GitLab wiki page](https://community.kde.org/Infrastructure/GitLab) for a tutorial on how to send a merge request.
+-* Reporting a bug? Please submit it on the [KDE Bugtracking System](https://bugs.kde.org/enter_bug.cgi?format=guided&product=Discover). Please do not use the Issues
+-  tab to report bugs.
+-* Is there a part of Discover that's not translated? See the [Getting Involved in Translation wiki page](https://community.kde.org/Get_Involved/translation) to see how
+-  you can help translate!
++`MAC_TEST_TOUR=<dir> plasma-discover` visits the main pages, saves a
++picture of each in `<dir>` and quits (`MAC_TEST_TOUR_ONLY=home,updates,…`
++for some).
+ 
+-If you get stuck or need help with anything at all, head over to the [KDE New Contributors room](https://go.kde.org/matrix/#/#kde-welcome:kde.org) on Matrix. For questions about Discover, please ask in the [Plasma Discover room](https://go.kde.org/matrix/#/#plasma-discover:kde.org). See [Matrix](https://community.kde.org/Matrix) for more details.
++## Upstream
+ 
++Discover is © the KDE community, and this keeps its licenses
++(GPL-2.0-or-later and others; see [LICENSES](LICENSES)). The window frame is
++shared with [finder-kde](https://github.com/jingledingle521/finder-kde) and
++[mac-settings-kde](https://github.com/jingledingle521/mac-settings-kde). Not
++affiliated with KDE or Apple.
+-- 
+2.56.0
+
