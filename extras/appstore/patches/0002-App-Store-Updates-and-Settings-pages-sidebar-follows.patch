@@ -1,0 +1,954 @@
+From d5cc46cf18bc7e4839e80380335ce582386e7988 Mon Sep 17 00:00:00 2001
+From: jingledingle521 <36874370+jingledingle521@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 08:03:47 -0500
+Subject: [PATCH 2/2] App Store: Updates and Settings pages, sidebar follows
+ links, icons
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Updates: a large title, "Available" with the count and size, an accent
+  Update All pill; plainer rows; the footer only while installing.
+- Settings: a large title; each source's rows in a rounded panel with a
+  switch and a ⋯ menu (priority, remove, contents).
+- The sidebar's selection follows the page at the bottom of the stack, so
+  categories, searches and apps opened from links or the command line
+  select the right section (or none).
+- App icons come from the icon theme by AppStream id when it has them
+  (WhiteSur restyles them; Fedora's Flatpak catalog leaves some without
+  one). PackageKit: find cached icons AppStream hands back as bare file
+  names; Flatpak: OCI remotes keep icons without an "active" checkout.
+- The search field just says Search; MAC_TEST_TOUR=<dir> saves pictures
+  of the main pages (MacTour).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KdkdNUmoM62iDwjRop6X5f
+---
+ discover/DiscoverObject.cpp                   |   6 +
+ discover/DiscoverObject.h                     |   2 +
+ discover/StoreChrome.cpp                      |  17 +++
+ discover/StoreChrome.h                        |   7 +
+ discover/qml/ApplicationPageFullComponent.qml |   4 +-
+ discover/qml/DiscoverWindow.qml               |   9 ++
+ discover/qml/MacAppIcon.qml                   |  35 +++++
+ discover/qml/MacAppRow.qml                    |   5 +-
+ discover/qml/MacFeatureCard.qml               |   5 +-
+ discover/qml/MacSidebar.qml                   |  54 +++++--
+ discover/qml/MacTour.qml                      |  47 ++++++
+ discover/qml/SearchField.qml                  |   3 +-
+ discover/qml/SourcesPage.qml                  | 138 +++++++++++++++---
+ discover/qml/UpdatesPage.qml                  | 130 ++++++++++++++---
+ discover/resources.qrc                        |   2 +
+ .../FlatpakBackend/FlatpakResource.cpp        |   9 +-
+ .../AppPackageKitResource.cpp                 |  33 ++++-
+ 17 files changed, 444 insertions(+), 62 deletions(-)
+ create mode 100644 discover/qml/MacAppIcon.qml
+ create mode 100644 discover/qml/MacTour.qml
+
+diff --git a/discover/DiscoverObject.cpp b/discover/DiscoverObject.cpp
+index 28185762f..30ca580a7 100644
+--- a/discover/DiscoverObject.cpp
++++ b/discover/DiscoverObject.cpp
+@@ -16,6 +16,7 @@
+ 
+ // Qt includes
+ #include "discover_debug.h"
++#include <QIcon>
+ #include <QClipboard>
+ #include <QDBusConnection>
+ #include <QDBusMessage>
+@@ -696,6 +697,11 @@ QUrl DiscoverObject::searchUrl(const QString &searchText)
+     return {};
+ }
+ 
++bool DiscoverObject::hasThemeIcon(const QString &name) const
++{
++    return !name.isEmpty() && QIcon::hasThemeIcon(name);
++}
++
+ QString DiscoverObject::mimeTypeComment(const QString &mimeTypeName)
+ {
+     QMimeDatabase db;
+diff --git a/discover/DiscoverObject.h b/discover/DiscoverObject.h
+index 66a152946..35e6f9578 100644
+--- a/discover/DiscoverObject.h
++++ b/discover/DiscoverObject.h
+@@ -48,6 +48,8 @@ public:
+     Q_INVOKABLE void copyTextToClipboard(const QString &text);
+     Q_INVOKABLE QUrl searchUrl(const QString &searchText);
+     Q_INVOKABLE QString mimeTypeComment(const QString &mimeTypeName);
++    /** App Store: whether the icon theme has an icon called @p name. */
++    Q_INVOKABLE bool hasThemeIcon(const QString &name) const;
+ 
+     QString describeSources() const;
+     Q_SCRIPTABLE void restore();
+diff --git a/discover/StoreChrome.cpp b/discover/StoreChrome.cpp
+index 55d96393a..6a5bb38e9 100644
+--- a/discover/StoreChrome.cpp
++++ b/discover/StoreChrome.cpp
+@@ -197,6 +197,23 @@ void StoreChrome::close()
+     }
+ }
+ 
++QString StoreChrome::testTour() const
++{
++    return qEnvironmentVariable("MAC_TEST_TOUR");
++}
++
++QStringList StoreChrome::testTourOnly() const
++{
++    return qEnvironmentVariable("MAC_TEST_TOUR_ONLY").split(QLatin1Char(','), Qt::SkipEmptyParts);
++}
++
++void StoreChrome::snap(const QString &name)
++{
++    if (m_window && !testTour().isEmpty()) {
++        m_window->grabWindow().save(testTour() + QLatin1Char('/') + name + QStringLiteral(".png"));
++    }
++}
++
+ Qt::Edges StoreChrome::edgesAt(const QPointF &pos) const
+ {
+     Qt::Edges edges;
+diff --git a/discover/StoreChrome.h b/discover/StoreChrome.h
+index 9c93f1b59..60f70bf48 100644
+--- a/discover/StoreChrome.h
++++ b/discover/StoreChrome.h
+@@ -50,6 +50,13 @@ public:
+     Q_INVOKABLE void minimize();
+     Q_INVOKABLE void close();
+ 
++    /** MAC_TEST_TOUR=<dir>: MacTour visits the pages and saves a picture
++     *  of each (snap) in <dir>, then quits. Empty when not touring. */
++    Q_INVOKABLE QString testTour() const;
++    /** MAC_TEST_TOUR_ONLY=<pictures,…>: just these (as named by the tour). */
++    Q_INVOKABLE QStringList testTourOnly() const;
++    Q_INVOKABLE void snap(const QString &name);
++
+ Q_SIGNALS:
+     void windowChanged();
+     void sidebarWidthChanged();
+diff --git a/discover/qml/ApplicationPageFullComponent.qml b/discover/qml/ApplicationPageFullComponent.qml
+index 2c426e389..af9d88e64 100644
+--- a/discover/qml/ApplicationPageFullComponent.qml
++++ b/discover/qml/ApplicationPageFullComponent.qml
+@@ -47,12 +47,12 @@ Kirigami.Padding {
+             Layout.fillWidth: true
+             spacing: Kirigami.Units.gridUnit * 1.2
+ 
+-            Kirigami.Icon {
++            MacAppIcon {
+                 id: appIcon
+                 Layout.alignment: Qt.AlignTop
+                 implicitWidth: Kirigami.Units.gridUnit * 7
+                 implicitHeight: implicitWidth
+-                source: fullComponent.application.icon
++                application: fullComponent.application
+             }
+ 
+             ColumnLayout {
+diff --git a/discover/qml/DiscoverWindow.qml b/discover/qml/DiscoverWindow.qml
+index 61ec6e419..92396e1a5 100644
+--- a/discover/qml/DiscoverWindow.qml
++++ b/discover/qml/DiscoverWindow.qml
+@@ -568,6 +568,15 @@ Kirigami.ApplicationWindow {
+         chrome: chrome
+     }
+ 
++    // MAC_TEST_TOUR=<dir>: pictures of the main pages (see MacTour).
++    Loader {
++        active: chrome.testTour() !== ""
++        sourceComponent: MacTour {
++            chrome: chrome
++            drawer: window.globalDrawer
++        }
++    }
++
+     onCurrentTopLevelChanged: {
+         pageStack.clear();
+         if (currentTopLevel) {
+diff --git a/discover/qml/MacAppIcon.qml b/discover/qml/MacAppIcon.qml
+new file mode 100644
+index 000000000..f19ce0d13
+--- /dev/null
++++ b/discover/qml/MacAppIcon.qml
+@@ -0,0 +1,35 @@
++// SPDX-FileCopyrightText: 2026 Brhett
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++import QtQuick
++import org.kde.discover as Discover
++import org.kde.kirigami as Kirigami
++
++// App Store: an app's icon, from the icon theme by its AppStream id when the
++// theme has one (macOS-styled themes like WhiteSur restyle app icons; and
++// Fedora's Flatpak catalog leaves some apps without one), else Discover's.
++Item {
++    id: root
++
++    required property Discover.AbstractResource application
++    property bool animated: false
++
++    implicitWidth: Kirigami.Units.iconSizes.large
++    implicitHeight: implicitWidth
++
++    readonly property string themeName: root.application.appstreamId.replace(/\.desktop$/, "")
++    readonly property bool themed: app.hasThemeIcon(themeName)
++
++    Kirigami.Icon {
++        anchors.fill: parent
++        visible: root.themed
++        source: visible ? root.themeName : ""
++        animated: root.animated
++    }
++    Kirigami.Icon {
++        anchors.fill: parent
++        visible: !root.themed
++        source: root.application.icon
++        animated: root.animated
++    }
++}
+diff --git a/discover/qml/MacAppRow.qml b/discover/qml/MacAppRow.qml
+index ea59c3d2b..16f3cd74b 100644
+--- a/discover/qml/MacAppRow.qml
++++ b/discover/qml/MacAppRow.qml
+@@ -38,12 +38,11 @@ MouseArea {
+         anchors.fill: parent
+         spacing: Kirigami.Units.largeSpacing
+ 
+-        Kirigami.Icon {
++        MacAppIcon {
+             id: icon
+             Layout.preferredWidth: Kirigami.Units.gridUnit * 3.2
+             Layout.preferredHeight: Layout.preferredWidth
+-            source: row.application.icon
+-            animated: false
++            application: row.application
+         }
+ 
+         ColumnLayout {
+diff --git a/discover/qml/MacFeatureCard.qml b/discover/qml/MacFeatureCard.qml
+index 3929cdd1b..9501d15ff 100644
+--- a/discover/qml/MacFeatureCard.qml
++++ b/discover/qml/MacFeatureCard.qml
+@@ -94,11 +94,10 @@ MouseArea {
+             Layout.fillWidth: true
+             spacing: Kirigami.Units.largeSpacing
+ 
+-            Kirigami.Icon {
++            MacAppIcon {
+                 Layout.preferredWidth: Kirigami.Units.gridUnit * 2.8
+                 Layout.preferredHeight: Layout.preferredWidth
+-                source: card.application.icon
+-                animated: false
++                application: card.application
+             }
+             ColumnLayout {
+                 Layout.fillWidth: true
+diff --git a/discover/qml/MacSidebar.qml b/discover/qml/MacSidebar.qml
+index ce837352b..59ca7419a 100644
+--- a/discover/qml/MacSidebar.qml
++++ b/discover/qml/MacSidebar.qml
+@@ -36,6 +36,12 @@ Kirigami.OverlayDrawer {
+         forceSearchFieldFocus();
+     }
+ 
++    // Searches for `text`, as if typed and Return pressed.
++    function search(text) {
++        searchField.text = text;
++        searchField.accepted();
++    }
++
+     function forceSearchFieldFocus() {
+         searchField.forceActiveFocus();
+     }
+@@ -53,7 +59,7 @@ Kirigami.OverlayDrawer {
+           run: () => { window.currentTopLevel = window.topUpdateComp; } },
+     ]
+ 
+-    function open(section) {
++    function openSection(section) {
+         selectedKey = section.key;
+         if (section.category) {
+             Navigation.openCategory(Discover.CategoryModel.findCategoryByName(section.category));
+@@ -62,20 +68,40 @@ Kirigami.OverlayDrawer {
+         }
+     }
+ 
+-    // Follow pages opened from elsewhere (Updates from a notification…).
++    // Follow pages opened from elsewhere (a link, the command line, Updates
++    // from a notification…): the page at the bottom of the stack decides.
++    function sync() {
++        const first = window.pageStack.items[0] ?? null;
++        if (first && first.hasOwnProperty("categoryObject")) {
++            // A list of apps: its themed section, else Categories; a search
++            // selects nothing.
++            const cat = first.categoryObject;
++            const section = cat ? drawer.sections.find(s => s.category && Discover.CategoryModel.get(Discover.CategoryModel.findCategoryByName(s.category)) === cat) : null;
++            selectedKey = section ? section.key : cat ? "categories" : "";
++            return;
++        }
++        const keys = {
++            [window.topBrowsingComp]: "discover",
++            [window.topCategoriesComp]: "categories",
++            [window.topUpdateComp]: "updates",
++            [window.topInstalledComp]: "installed",
++            [window.topSourcesComp]: "sources",
++        };
++        selectedKey = keys[window.currentTopLevel] ?? "";
++    }
+     Connections {
+         target: window
+         function onCurrentTopLevelChanged() {
+-            const keys = {
+-                [window.topBrowsingComp]: "discover",
+-                [window.topCategoriesComp]: "categories",
+-                [window.topUpdateComp]: "updates",
+-                [window.topInstalledComp]: "installed",
+-                [window.topSourcesComp]: "sources",
+-            };
+-            if (keys[window.currentTopLevel]) {
+-                drawer.selectedKey = keys[window.currentTopLevel];
+-            }
++            Qt.callLater(drawer.sync);
++        }
++    }
++    Connections {
++        target: window.pageStack
++        function onDepthChanged() {
++            Qt.callLater(drawer.sync);
++        }
++        function onCurrentItemChanged() {
++            Qt.callLater(drawer.sync);
+         }
+     }
+ 
+@@ -132,7 +158,7 @@ Kirigami.OverlayDrawer {
+                 }
+                 if (currentSearchText === "" && (!curr || !curr.hasOwnProperty("search") || !curr.category)) {
+                     if (drawer.selectedKey === "") {
+-                        drawer.open(drawer.sections[0]);
++                        drawer.openSection(drawer.sections[0]);
+                     }
+                 } else if (!curr || !curr.hasOwnProperty("search")) {
+                     Navigation.clearStack();
+@@ -164,7 +190,7 @@ Kirigami.OverlayDrawer {
+                 glyph: modelData.glyph
+                 badge: modelData.badge && Discover.ResourcesModel.updatesCount > 0 ? Discover.ResourcesModel.updatesCount : 0
+                 busy: modelData.badge === true && Discover.ResourcesModel.fetchingUpdatesProgress < 100
+-                onClicked: drawer.open(modelData)
++                onClicked: drawer.openSection(modelData)
+             }
+         }
+ 
+diff --git a/discover/qml/MacTour.qml b/discover/qml/MacTour.qml
+new file mode 100644
+index 000000000..e3dfc54c9
+--- /dev/null
++++ b/discover/qml/MacTour.qml
+@@ -0,0 +1,47 @@
++// SPDX-FileCopyrightText: 2026 Brhett
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++import QtQuick
++import org.kde.discover as Discover
++
++// App Store: MAC_TEST_TOUR=<dir> visits the main pages and saves a picture
++// of the window for each (StoreChrome.snap), then quits. For checking the
++// look without touching the mouse or keyboard. MAC_TEST_TOUR_ONLY=<a,b>
++// limits it to those pictures.
++Timer {
++    id: tour
++
++    required property var chrome
++    required property var drawer
++
++    readonly property var only: chrome.testTourOnly()
++    readonly property var steps: [
++        ["home", () => drawer.openSection(drawer.sections[0])],
++        ["create", () => drawer.openSection(drawer.sections[1])],
++        ["categories", () => drawer.openSection(drawer.sections[5])],
++        ["category-link", () => app.openCategory("Games")],
++        ["app", () => app.openApplication("appstream://org.kde.krita")],
++        ["search", () => drawer.search("paint")],
++        ["updates", () => { drawer.search(""); drawer.openSection(drawer.sections[6]); }],
++        ["installed", () => { drawer.selectedKey = "installed"; window.currentTopLevel = window.topInstalledComp; }],
++        ["sources", () => { drawer.selectedKey = "sources"; window.currentTopLevel = window.topSourcesComp; }],
++    ].filter(step => only.length === 0 || only.includes(step[0]))
++    property int step: -1
++
++    interval: 9000 // let the backends load first
++    running: true
++    repeat: true
++    onTriggered: {
++        if (step >= 0) {
++            chrome.snap(steps[step][0]);
++        }
++        step++;
++        if (step >= steps.length) {
++            running = false;
++            Qt.quit();
++            return;
++        }
++        steps[step][1]();
++        interval = 4500;
++    }
++}
+diff --git a/discover/qml/SearchField.qml b/discover/qml/SearchField.qml
+index d64cabf45..9245403ea 100644
+--- a/discover/qml/SearchField.qml
++++ b/discover/qml/SearchField.qml
+@@ -23,7 +23,8 @@ Kirigami.SearchField {
+     property QtObject page
+     property string currentSearchText
+ 
+-    placeholderText: (!enabled || !page || page.hasOwnProperty("isHome") || window.leftPage.name.length === 0) ? i18n("Search…") : i18n("Search in '%1'…", window.leftPage.name)
++    // App Store: macOS's field just says Search, whatever the page.
++    placeholderText: i18nc("@info:placeholder", "Search")
+ 
+     onAccepted: {
+         text = text.trim();
+diff --git a/discover/qml/SourcesPage.qml b/discover/qml/SourcesPage.qml
+index 7900fdc6f..8ee4fcceb 100644
+--- a/discover/qml/SourcesPage.qml
++++ b/discover/qml/SourcesPage.qml
+@@ -16,6 +16,8 @@ DiscoverPage {
+ 
+     clip: true
+     title: i18n("Settings")
++    // App Store: the title is drawn large in the list (macOS's).
++    readonly property bool macOwnTitle: true
+ 
+     Kirigami.Action {
+         id: configureUpdatesAction
+@@ -31,6 +33,20 @@ DiscoverPage {
+     header: ColumnLayout {
+         spacing: Kirigami.Units.smallSpacing
+ 
++        // App Store: the large title, above the list (sources that load
++        // later are inserted at the list's top and would slide under a
++        // list header).
++        Kirigami.Heading {
++            Layout.fillWidth: true
++            Layout.leftMargin: Kirigami.Units.gridUnit * 1.5
++            Layout.rightMargin: Kirigami.Units.gridUnit * 1.5
++            level: 1
++            font.weight: Font.Bold
++            font.pointSize: Kirigami.Theme.defaultFont.pointSize * 2.1
++            text: page.title
++            elide: Text.ElideRight
++        }
++
+         Repeater {
+             model: Discover.SourcesModel.sources
+ 
+@@ -54,8 +70,26 @@ DiscoverPage {
+ 
+     ListView {
+         id: sourcesView
++
++        // App Store: a list isn't padded by the page; keep it off the sidebar.
++        readonly property real innerWidth: width - leftMargin - rightMargin
++        leftMargin: Kirigami.Units.gridUnit * 1.5
++        rightMargin: Kirigami.Units.gridUnit * 1.5
++
+         model: Discover.SourcesModel
+         Component.onCompleted: Qt.callLater(Discover.SourcesModel.showingNow)
++        // App Store: start at the title while the sources load, not wherever
++        // the rows settle; until the user scrolls.
++        property bool userScrolled: false
++        onMovementStarted: userScrolled = true
++        // (Sources load above the first ones too, and the list keeps what's
++        // on screen in place by moving its origin.)
++        onOriginYChanged: if (!userScrolled) {
++            contentY = originY;
++        }
++        onContentHeightChanged: if (!userScrolled) {
++            contentY = originY;
++        }
+         currentIndex: -1
+         pixelAligned: true
+         section.property: "sourceName"
+@@ -64,13 +98,16 @@ DiscoverPage {
+ 
+             required property string section
+ 
+-            height: Math.ceil(Math.max(Kirigami.Units.gridUnit * 2.5, contentItem.implicitHeight))
++            height: Math.ceil(Math.max(Kirigami.Units.gridUnit * 2.5, contentItem.implicitHeight)) + topPadding
++            topPadding: Kirigami.Units.gridUnit
++            leftPadding: Kirigami.Units.smallSpacing
++            rightPadding: 0
+ 
+             readonly property Discover.AbstractSourcesBackend backend: Discover.SourcesModel.sourcesBackendByName(section)
+             readonly property Discover.AbstractResourcesBackend resourcesBackend: backend.resourcesBackend
+             readonly property bool isDefault: Discover.ResourcesModel.currentApplicationBackend === resourcesBackend
+ 
+-            width: sourcesView.width
++            width: sourcesView.innerWidth
+ 
+             Connections {
+                 target: backendItem.backend
+@@ -93,7 +130,7 @@ DiscoverPage {
+                 Kirigami.Heading {
+                     text: resourcesBackend.displayName
+                     level: 3
+-                    font.weight: backendItem.isDefault ? Font.Bold : Font.Normal
++                    font.weight: Font.Bold
+                 }
+ 
+                 Kirigami.ActionToolBar {
+@@ -106,10 +143,9 @@ DiscoverPage {
+ 
+                         visible: backendItem.isDefault
+                         displayHint: Kirigami.DisplayHint.KeepVisible
+-                        displayComponent: Kirigami.Heading {
++                        displayComponent: QQC2.Label {
+                             text: i18n("Default Source")
+-                            level: 3
+-                            font.weight: Font.Bold
++                            opacity: 0.6
+                         }
+                     }
+ 
+@@ -228,7 +264,7 @@ DiscoverPage {
+             }
+         }
+ 
+-        delegate: Kirigami.SwipeListItem {
++        delegate: QQC2.ItemDelegate {
+             id: delegate
+ 
+             required property int index
+@@ -236,13 +272,43 @@ DiscoverPage {
+ 
+             enabled: model.display.length > 0 && model.enabled
+             highlighted: ListView.isCurrentItem
+-            supportsMouseEvents: false
+             visible: model.display.indexOf(page.search) >= 0
+             height: visible ? implicitHeight : 0
++            width: sourcesView.innerWidth
++            leftPadding: Kirigami.Units.largeSpacing
++            rightPadding: Kirigami.Units.largeSpacing
++            topInset: 0
++            bottomInset: 0
++            leftInset: 0
++            rightInset: 0
++
++            // App Store: each source's rows share a rounded panel, as macOS's
++            // settings group them; hairlines between rows.
++            readonly property bool firstInGroup: ListView.previousSection !== ListView.section
++            readonly property bool lastInGroup: ListView.nextSection !== ListView.section
++            background: Kirigami.ShadowedRectangle {
++                readonly property real r: 10
++                color: Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g, Kirigami.Theme.textColor.b, 0.05)
++                corners.topLeftRadius: delegate.firstInGroup ? r : 0
++                corners.topRightRadius: delegate.firstInGroup ? r : 0
++                corners.bottomLeftRadius: delegate.lastInGroup ? r : 0
++                corners.bottomRightRadius: delegate.lastInGroup ? r : 0
++                Rectangle {
++                    visible: !delegate.lastInGroup
++                    anchors.bottom: parent.bottom
++                    anchors.left: parent.left
++                    anchors.right: parent.right
++                    anchors.leftMargin: Kirigami.Units.largeSpacing
++                    anchors.rightMargin: Kirigami.Units.largeSpacing
++                    height: 1
++                    color: Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g, Kirigami.Theme.textColor.b, 0.08)
++                }
++            }
+ 
+             Keys.onReturnPressed: enabledBox.clicked()
+             Keys.onSpacePressed: enabledBox.clicked()
+-            actions: [
++            // App Store: the row's actions in a ⋯ menu (macOS's), not swiped in.
++            readonly property list<Kirigami.Action> rowActions: [
+                 Kirigami.Action {
+                     icon.name: "go-up"
+                     tooltip: i18n("Increase priority")
+@@ -289,9 +355,51 @@ DiscoverPage {
+             ]
+ 
+             contentItem: RowLayout {
+-                spacing: Kirigami.Units.smallSpacing
++                spacing: Kirigami.Units.largeSpacing
+ 
+-                QQC2.CheckBox {
++                ColumnLayout {
++                    Layout.fillWidth: true
++                    Layout.topMargin: Kirigami.Units.smallSpacing
++                    Layout.bottomMargin: Kirigami.Units.smallSpacing
++                    spacing: 0
++                    QQC2.Label {
++                        Layout.fillWidth: true
++                        text: delegate.model.display
++                        elide: Text.ElideRight
++                    }
++                    QQC2.Label {
++                        Layout.fillWidth: true
++                        visible: text.length > 0
++                        text: delegate.model.toolTip ?? ""
++                        font: Kirigami.Theme.smallFont
++                        opacity: 0.6
++                        elide: Text.ElideRight
++                    }
++                }
++                QQC2.ToolButton {
++                    id: moreButton
++                    visible: delegate.rowActions.some(action => action.visible)
++                    icon.name: "overflow-menu"
++                    display: QQC2.AbstractButton.IconOnly
++                    text: i18nc("@action:button", "More")
++                    onClicked: rowMenu.popup(moreButton, 0, moreButton.height)
++                    QQC2.Menu {
++                        id: rowMenu
++                        Repeater {
++                            model: delegate.rowActions
++                            delegate: QQC2.MenuItem {
++                                required property Kirigami.Action modelData
++                                visible: modelData?.visible ?? false
++                                height: visible ? implicitHeight : 0
++                                enabled: modelData?.enabled ?? false
++                                icon.name: modelData?.icon.name ?? ""
++                                text: modelData?.tooltip ?? ""
++                                onTriggered: modelData?.trigger()
++                            }
++                        }
++                    }
++                }
++                QQC2.Switch {
+                     id: enabledBox
+ 
+                     readonly property var idx: index !== -1 ? sourcesView.model.index(index, 0) : null
+@@ -306,18 +414,12 @@ DiscoverPage {
+                     QQC2.ToolTip.visible: hovered
+                     QQC2.ToolTip.delay: Kirigami.Units.toolTipDelay
+                 }
+-                QQC2.Label {
+-                    text: delegate.model.display + (delegate.model.toolTip ? " - <i>" + delegate.model.toolTip + "</i>" : "")
+-                    elide: Text.ElideRight
+-                    textFormat: Text.StyledText
+-                    Layout.fillWidth: true
+-                }
+             }
+         }
+ 
+         footer: ColumnLayout {
+             spacing: 0
+-            width: ListView.view.width
++            width: sourcesView.innerWidth
+ 
+             Kirigami.ListSectionHeader {
+                 Layout.fillWidth: true
+diff --git a/discover/qml/UpdatesPage.qml b/discover/qml/UpdatesPage.qml
+index e147f5947..ddc58068d 100644
+--- a/discover/qml/UpdatesPage.qml
++++ b/discover/qml/UpdatesPage.qml
+@@ -12,6 +12,8 @@ DiscoverPage {
+     id: page
+ 
+     title: i18n("Updates")
++    // App Store: the title is drawn large in the list (macOS's).
++    readonly property bool macOwnTitle: true
+ 
+     property string footerLabel: ""
+     property int footerProgress: 0
+@@ -248,7 +250,9 @@ DiscoverPage {
+         QQC2.ToolBar {
+             id: footerToolbar
+             Layout.fillWidth: true
+-            visible: (updateModel.totalUpdatesCount > 0 && resourcesUpdatesModel.isProgressing) || (!resourcesUpdatesModel.isFetching && updateModel.hasUpdates)
++            // App Store: only while installing (Update All and the total size
++            // are in the list's header).
++            visible: updateModel.totalUpdatesCount > 0 && resourcesUpdatesModel.isProgressing
+ 
+             position: QQC2.ToolBar.Footer
+ 
+@@ -299,12 +303,11 @@ DiscoverPage {
+                     }
+                 }
+ 
+-                QQC2.Label {
+-                    Layout.fillWidth: true
+-                    Layout.rightMargin: Kirigami.Units.largeSpacing
+-                    horizontalAlignment: Text.AlignRight
+-                    text: i18n("Total size: %1", updateModel.updateSize)
+-                    elide: Text.ElideLeft
++                QQC2.ToolButton {
++                    icon.name: "dialog-cancel"
++                    text: cancelUpdateAction.text
++                    enabled: cancelUpdateAction.enabled
++                    onClicked: cancelUpdateAction.trigger()
+                 }
+             }
+         }
+@@ -372,6 +375,78 @@ DiscoverPage {
+     }
+     ListView {
+         id: updatesView
++
++        // App Store: a list isn't padded by the page; keep it off the sidebar.
++        readonly property real innerWidth: width - leftMargin - rightMargin
++        leftMargin: Kirigami.Units.gridUnit * 1.5
++        rightMargin: Kirigami.Units.gridUnit * 1.5
++
++        header: ColumnLayout {
++            width: updatesView.innerWidth
++            spacing: Kirigami.Units.largeSpacing
++
++            Kirigami.Heading {
++                Layout.fillWidth: true
++                level: 1
++                font.weight: Font.Bold
++                font.pointSize: Kirigami.Theme.defaultFont.pointSize * 2.1
++                text: page.title
++                elide: Text.ElideRight
++            }
++            // "Available", what it comes to, and Update All.
++            RowLayout {
++                Layout.fillWidth: true
++                Layout.bottomMargin: Kirigami.Units.largeSpacing
++                visible: updateModel.hasUpdates && !resourcesUpdatesModel.isFetching
++                spacing: Kirigami.Units.largeSpacing
++
++                ColumnLayout {
++                    Layout.fillWidth: true
++                    spacing: 0
++                    Kirigami.Heading {
++                        level: 2
++                        font.weight: Font.Bold
++                        text: i18nc("@title updates that can be installed", "Available")
++                    }
++                    QQC2.Label {
++                        Layout.fillWidth: true
++                        opacity: 0.6
++                        elide: Text.ElideRight
++                        text: i18ncp("@info %2 is a size", "%1 update · %2", "%1 updates · %2", updateModel.toUpdateCount, updateModel.updateSize)
++                    }
++                }
++                QQC2.Button {
++                    flat: true
++                    visible: updateModel.totalUpdatesCount > 1 && !resourcesUpdatesModel.isProgressing
++                    text: page.unselected > 0 ? i18n("Select All") : i18n("Select None")
++                    onClicked: page.unselected > 0 ? updateModel.checkAll() : updateModel.uncheckAll()
++                }
++                // macOS's accent pill.
++                QQC2.AbstractButton {
++                    id: updateAllButton
++                    visible: updateAction.visible
++                    enabled: updateAction.enabled
++                    text: updateAction.text
++                    onClicked: updateAction.trigger()
++                    leftPadding: Kirigami.Units.gridUnit
++                    rightPadding: Kirigami.Units.gridUnit
++                    topPadding: Kirigami.Units.smallSpacing * 1.2
++                    bottomPadding: Kirigami.Units.smallSpacing * 1.2
++                    opacity: enabled ? 1 : 0.5
++                    background: Rectangle {
++                        radius: height / 2
++                        color: updateAllButton.down ? Qt.darker(Kirigami.Theme.focusColor, 1.15) : Kirigami.Theme.focusColor
++                    }
++                    contentItem: QQC2.Label {
++                        text: updateAllButton.text
++                        font.weight: Font.Bold
++                        color: "white"
++                        horizontalAlignment: Text.AlignHCenter
++                    }
++                }
++            }
++        }
++
+         currentIndex: -1
+         reuseItems: true
+         clip: true
+@@ -394,11 +469,15 @@ DiscoverPage {
+ 
+         section {
+             property: "section"
+-            delegate: Kirigami.ListSectionHeader {
++            delegate: QQC2.Label {
+                 required property string section
+ 
+-                width: updatesView.width
+-                label: section
++                width: updatesView.innerWidth
++                topPadding: Kirigami.Units.largeSpacing
++                bottomPadding: Kirigami.Units.smallSpacing
++                text: section
++                font.weight: Font.DemiBold
++                opacity: 0.6
+             }
+         }
+ 
+@@ -410,9 +489,23 @@ DiscoverPage {
+             required property int index
+             required property bool extended
+ 
+-            width: updatesView.width
++            width: updatesView.innerWidth
++            leftPadding: 0
++            rightPadding: 0
+ 
+             highlighted: false
++            // App Store: no row highlight; a hairline under each.
++            background: Rectangle {
++                color: "transparent"
++                Rectangle {
++                    anchors.bottom: parent.bottom
++                    anchors.left: parent.left
++                    anchors.leftMargin: delegateLayout.extraContentLeadingMargin
++                    anchors.right: parent.right
++                    height: 1
++                    color: Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g, Kirigami.Theme.textColor.b, 0.1)
++                }
++            }
+             focus: ListView.isCurrentItem
+             activeFocusOnTab: ListView.isCurrentItem
+             checked: itemChecked.checked
+@@ -484,8 +577,8 @@ DiscoverPage {
+ 
+                     Kirigami.Icon {
+                         id: itemIcon
+-                        Layout.preferredWidth: Kirigami.Units.iconSizes.medium
+-                        Layout.preferredHeight: Kirigami.Units.iconSizes.medium
++                        Layout.preferredWidth: Kirigami.Units.gridUnit * 2.6
++                        Layout.preferredHeight: Layout.preferredWidth
+                         source: listItem.model.decoration
+                         selected: listItem.down
+                         smooth: true
+@@ -500,10 +593,10 @@ DiscoverPage {
+                         spacing: 0
+ 
+                         // App name
+-                        Kirigami.Heading {
++                        QQC2.Label {
+                             Layout.fillWidth: true
+                             text: listItem.model.display
+-                            level: 3
++                            font.weight: Font.DemiBold
+                             elide: Text.ElideRight
+                             color: listItem.down ? Kirigami.Theme.highlightedTextColor : Kirigami.Theme.textColor
+                         }
+@@ -513,8 +606,9 @@ DiscoverPage {
+                             Layout.fillWidth: true
+                             elide: truncated ? Text.ElideLeft : Text.ElideRight
+                             text: listItem.model.resource?.upgradeText ?? ""
++                            font: Kirigami.Theme.smallFont
+                             color: listItem.down ? Kirigami.Theme.highlightedTextColor : Kirigami.Theme.textColor
+-                            opacity: 0.75
++                            opacity: 0.6
+                         }
+                     }
+ 
+@@ -644,7 +738,7 @@ DiscoverPage {
+             name: "fetching"
+             PropertyChanges { page.footerLabel: i18nc("@info", "Fetching updates…") }
+             PropertyChanges { page.footerProgress: Discover.ResourcesModel.fetchingUpdatesProgress }
+-            PropertyChanges { page.actions: [ updateAction, refreshAction ] }
++            PropertyChanges { page.actions: [ refreshAction ] }
+             PropertyChanges { page.busy: true }
+             PropertyChanges { statusLabel.progressBar.visible: true }
+             PropertyChanges { updatesView.opacity: 0 }
+@@ -661,7 +755,7 @@ DiscoverPage {
+             // On mobile, we want "Update" to be the primary action so it's in
+             // the center, but on desktop this feels a bit awkward and it would
+             // be better to have "Update" be the right-most action
+-            PropertyChanges { page.actions: [ updateAction, refreshAction ] }
++            PropertyChanges { page.actions: [ refreshAction ] }
+             PropertyChanges { statusLabel.visible: false }
+         },
+         State {
+diff --git a/discover/resources.qrc b/discover/resources.qrc
+index c25ebb9c2..25367dd8e 100644
+--- a/discover/resources.qrc
++++ b/discover/resources.qrc
+@@ -6,6 +6,8 @@
+     <file>qml/MacSidebarRow.qml</file>
+     <file>qml/MacStoplights.qml</file>
+     <file>qml/MacToolbar.qml</file>
++    <file>qml/MacTour.qml</file>
++    <file>qml/MacAppIcon.qml</file>
+     <file>qml/MacGetButton.qml</file>
+     <file>qml/MacAppRow.qml</file>
+     <file>qml/MacShelf.qml</file>
+diff --git a/libdiscover/backends/FlatpakBackend/FlatpakResource.cpp b/libdiscover/backends/FlatpakBackend/FlatpakResource.cpp
+index 4fb22a2fe..604411d8c 100644
+--- a/libdiscover/backends/FlatpakBackend/FlatpakResource.cpp
++++ b/libdiscover/backends/FlatpakBackend/FlatpakResource.cpp
+@@ -237,8 +237,13 @@ void FlatpakResource::resolveIcon()
+             case AppStream::Icon::KindCached: {
+                 const QString path = icon.url().toLocalFile();
+                 if (QDir::isRelativePath(path)) {
+-                    const QString appstreamLocation =
+-                        installationPath() + "/appstream/"_L1 + origin() + '/'_L1 + QString::fromUtf8(flatpak_get_default_arch()) + "/active/icons/"_L1;
++                    const QString archLocation = installationPath() + "/appstream/"_L1 + origin() + '/'_L1 + QString::fromUtf8(flatpak_get_default_arch());
++                    // App Store: OCI remotes (Fedora's) keep their icons
++                    // beside the metadata, with no "active" checkout.
++                    QString appstreamLocation = archLocation + "/active/icons/"_L1;
++                    if (!QFileInfo::exists(appstreamLocation)) {
++                        appstreamLocation = archLocation + "/icons/"_L1;
++                    }
+                     QDirIterator dit(appstreamLocation, QDirIterator::Subdirectories);
+                     while (dit.hasNext()) {
+                         const auto currentPath = dit.next();
+diff --git a/libdiscover/backends/PackageKitBackend/AppPackageKitResource.cpp b/libdiscover/backends/PackageKitBackend/AppPackageKitResource.cpp
+index a51e74c6d..d6f1f051d 100644
+--- a/libdiscover/backends/PackageKitBackend/AppPackageKitResource.cpp
++++ b/libdiscover/backends/PackageKitBackend/AppPackageKitResource.cpp
+@@ -20,7 +20,9 @@
+ #include <LazyIconResolver.h>
+ #include <PackageKit/Daemon>
+ #include <QDebug>
++#include <QDir>
+ #include <QFile>
++#include <QFileInfo>
+ #include <QIcon>
+ #include <QProcess>
+ #include <QStandardPaths>
+@@ -66,6 +68,33 @@ QString AppPackageKitResource::longDescription()
+     return PackageKitResource::longDescription();
+ }
+ 
++// App Store: AppStream sometimes hands back a cached icon as a bare file
++// name (after its cache is rebuilt); look for it in the catalogs' icon
++// folders (<dir>/<origin>/<W>x<H>/<name>) instead.
++static QString findCachedIcon(const AppStream::Icon &icon)
++{
++    const QString path = icon.url().toLocalFile();
++    if (!path.isEmpty() && QFileInfo::exists(path)) {
++        return path;
++    }
++    const QString name = QFileInfo(path.isEmpty() ? icon.url().toString() : path).fileName();
++    if (name.isEmpty()) {
++        return {};
++    }
++    const QString size = u"%1x%2"_s.arg(icon.width()).arg(icon.height());
++    static const QStringList roots = {u"/usr/share/swcatalog/icons"_s, u"/var/cache/swcatalog/icons"_s, u"/usr/share/app-info/icons"_s, u"/var/cache/app-info/icons"_s};
++    for (const QString &root : roots) {
++        const auto origins = QDir(root).entryList(QDir::Dirs | QDir::NoDotAndDotDot);
++        for (const QString &origin : origins) {
++            const QString candidate = root + u'/' + origin + u'/' + size + u'/' + name;
++            if (QFileInfo::exists(candidate)) {
++                return candidate;
++            }
++        }
++    }
++    return {};
++}
++
+ static QIcon componentIcon(const AppStream::Component &comp)
+ {
+     QIcon ret;
+@@ -76,7 +105,9 @@ static QIcon componentIcon(const AppStream::Component &comp)
+             ret.addFile(icon.url().toLocalFile(), icon.size());
+             break;
+         case AppStream::Icon::KindCached:
+-            ret.addFile(icon.url().toLocalFile(), icon.size());
++            if (const QString path = findCachedIcon(icon); !path.isEmpty()) {
++                ret.addFile(path, icon.size());
++            }
+             break;
+         case AppStream::Icon::KindStock: {
+             if (AppStreamUtils::kIconLoaderHasIcon(icon.name())) {
+-- 
+2.56.0
+

@@ -22,6 +22,7 @@ and Mac-style widgets for the menu bar.
 | `extras/kvantum` | Older alternative to `extras/menu-style` for Plasma's own menus only (needs `kvantum`) |
 | `extras/finder` | Finder: Dolphin rebuilt as a Golden Gate Finder (frameless glass window, sidebar, toolbar capsules, Finder selection and footer). Separate app; stock Dolphin is untouched. `./install.sh --finder` or `extras/finder/build-finder [--deps]`. Also: column view, Finder-style Open/Save windows for other apps (through xdg-desktop-portal; set up by the installer, asks for your password once), and AirDrop with iPhones and Macs (sidebar, Ctrl+Shift+R, right-click › Share › AirDrop, progress cards) once `./install.sh --airdrop` (or `extras/finder/install-airdrop`) has set up [omdrop-owl](https://github.com/t4t5/omdrop-owl) and [omdrop](https://github.com/netmojo-systems/omdrop-plugin). On Intel Wi-Fi, Wi-Fi disconnects while AirDrop is on. |
 | `extras/settings` | Mac Settings: KDE's System Settings laid out as macOS's (frameless glass window with stoplights, the account card and macOS's sidebar groups with coloured tiles, grouped-panel forms, back-navigable lists of pages). Patches against System Settings 6.7.5 (the full fork: [mac-settings-kde](https://github.com/jingledingle521/mac-settings-kde)); stock System Settings stays installed. `./install.sh --settings` or `extras/settings/build-settings [--deps]`. |
+| `extras/appstore` | App Store: KDE's Discover laid out as macOS's App Store (frameless glass window with stoplights; a sidebar of Discover, Create, Work, Play, Develop, Categories and Updates with the account card; a Discover page of feature cards and shelves; Get/Open buttons with an install progress ring; app pages with a facts strip; grouped Settings). Patches against Discover 6.7.5; stock Discover stays installed. `./install.sh --appstore` or `extras/appstore/build-appstore [--deps]`. |
 | `extras/dolphin` | Optional Finder-style Dolphin toolbar and sidebar (`finder-style.sh`, with Dolphin closed) |
 | `extras/sddm` | Optional Golden Gate login screen for SDDM (`install-sddm.sh`; Fedora, needs sudo) |
 
@@ -95,16 +96,17 @@ also set it from a terminal:
 - Optional: an app-menu provider such as `appmenu-gtk-module`, so GTK apps show their menus in the menu bar.
 - Build tools: the dock and notifications need a small native helper that
   the installer compiles (`extras/dock-helper/install.sh` lists the Fedora
-  packages). The Mac menus and controls (`--menus`), Finder and Mac Settings
-  are compiled too.
+  packages). The Mac menus and controls (`--menus`), Finder, Mac Settings
+  and App Store are compiled too.
 
 ### Known limits
 
 - Written and used on Fedora 44 with Plasma 6.7.5. Other distributions
   should work for the theme and widgets; the build scripts use `dnf`, and
   the tray patch expects Fedora's `/usr/lib64` layout.
-- Finder's patches are for Dolphin 26.08.1 and Mac Settings' for System
-  Settings 6.7.5; other versions may not apply cleanly.
+- Finder's patches are for Dolphin 26.08.1, Mac Settings' for System
+  Settings 6.7.5 and App Store's for Discover 6.7.5; other versions may not
+  apply cleanly.
 - `--lockscreen` installs a custom lock screen that its author has since
   turned off after two lockouts (probably a graphics-driver freeze rather
   than the lock screen, but unconfirmed). The stock lock screen with the

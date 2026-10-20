@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Build App Store (KDE's Discover restyled as macOS's App Store) and install
+# it for the current user: into ~/.local/opt/appstore, with a
+# `plasma-discover` in ~/.local/bin so the Apple menu's "App Store…", the
+# launcher and update notifications open it, and a menu entry named
+# "App Store". Stock Discover stays installed (/usr/bin/plasma-discover);
+# delete ~/.local/bin/plasma-discover and
+# ~/.local/share/applications/org.kde.discover.desktop to go back to it.
+#
+#   build-appstore            build and install
+#   build-appstore --deps     first install Discover's build dependencies
+#                             (asks for your password through the KDE root prompt)
+set -euo pipefail
+
+here=$(cd "$(dirname "$0")" && pwd)
+version=v6.7.5                 # the Discover release the patches apply to
+src=${XDG_CACHE_HOME:-$HOME/.cache}/mac-glass-kde/appstore-src
+prefix=$HOME/.local/opt/appstore
+data=${XDG_DATA_HOME:-$HOME/.local/share}
+
+if [ "${1:-}" = --deps ]; then
+    pkexec dnf -y builddep plasma-discover
+fi
+
+for tool in git cmake ninja g++; do
+    command -v "$tool" >/dev/null || { echo "missing $tool (try: build-appstore --deps)" >&2; exit 1; }
+done
+
+installed=$(QT_QPA_PLATFORM=offscreen /usr/bin/plasma-discover --version 2>/dev/null | awk '{print $2}') || installed=""
+if [ -n "$installed" ] && [ "v$installed" != "$version" ]; then
+    echo "Note: your Plasma's Discover is $installed; the patches are for ${version#v}." >&2
+fi
+
+if [ ! -d "$src/.git" ]; then
+    mkdir -p "$(dirname "$src")"
+    git clone --branch "$version" --depth 1 https://invent.kde.org/plasma/discover.git "$src"
+fi
+cd "$src"
+git checkout -q -f "$version"
+git -c user.name=AppStore -c user.email=appstore@localhost am -q --abort 2>/dev/null || true
+git -c user.name=AppStore -c user.email=appstore@localhost am -q "$here"/patches/*.patch
+
+cmake -S "$src" -B "$src/build" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix" -DBUILD_TESTING=OFF -Wno-dev >/dev/null
+ninja -C "$src/build" install >/dev/null
+
+# The backends (PackageKit, Flatpak, firmware) are plugins beside the app.
+plugins=$(dirname "$(find "$prefix" -path '*/plugins/discover' -type d | head -n1)")
+mkdir -p "$HOME/.local/bin"
+cat > "$HOME/.local/bin/plasma-discover" <<WRAPPER
+#!/bin/sh
+# App Store: the macOS-style Discover (mac-glass-kde extras/appstore).
+# Delete this file to go back to the stock app (/usr/bin/plasma-discover).
+QT_PLUGIN_PATH="$plugins\${QT_PLUGIN_PATH:+:\$QT_PLUGIN_PATH}" \\
+    exec "$prefix/bin/plasma-discover" "\$@"
+WRAPPER
+chmod +x "$HOME/.local/bin/plasma-discover"
+
+# The menu entry, renamed (the stock one, otherwise as it is).
+mkdir -p "$data/applications"
+{
+    echo "# App Store: the macOS-style Discover (mac-glass-kde). Delete to restore the stock entry."
+    awk '
+    /^\[/ { main = ($0 == "[Desktop Entry]") }
+    main && /^(Name|GenericName)\[/ { next }
+    main && /^Name=/ { print "Name=App Store"; next }
+    main && /^GenericName=/ { print "GenericName=Software Store"; next }
+    { print }' /usr/share/applications/org.kde.discover.desktop
+} > "$data/applications/org.kde.discover.desktop"
+kbuildsycoca6 >/dev/null 2>&1 || true
+
+echo "App Store installed in $prefix; 'plasma-discover' now opens it."
