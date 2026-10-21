@@ -94,7 +94,7 @@ PlasmoidItem {
     compactRepresentation: MouseArea {
         property bool wasExpanded: false
 
-        Layout.minimumWidth: speaker.implicitWidth + Kirigami.Units.smallSpacing * 2
+        Layout.minimumWidth: speaker.implicitWidth + Kirigami.Units.largeSpacing * 1.5 // + the panel's ~5 px: even ~17 px gaps, as macOS
         Layout.maximumWidth: Layout.minimumWidth
         Layout.fillHeight: true
         acceptedButtons: Qt.LeftButton | Qt.MiddleButton

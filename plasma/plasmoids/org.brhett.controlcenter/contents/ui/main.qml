@@ -157,7 +157,7 @@ PlasmoidItem {
     compactRepresentation: MouseArea {
         property bool wasExpanded: false
 
-        Layout.minimumWidth: Kirigami.Units.iconSizes.small + Kirigami.Units.smallSpacing * 2
+        Layout.minimumWidth: controlGlyph.implicitWidth + Kirigami.Units.largeSpacing * 1.5 // + the panel's ~5 px: even ~17 px gaps, as macOS
         Layout.maximumWidth: Layout.minimumWidth
         Layout.fillHeight: true
         hoverEnabled: true
@@ -165,6 +165,7 @@ PlasmoidItem {
         onClicked: root.expanded = !wasExpanded
 
         ControlGlyph {
+            id: controlGlyph
             anchors.centerIn: parent
             width: implicitWidth
             height: implicitHeight

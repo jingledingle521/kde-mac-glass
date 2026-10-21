@@ -70,7 +70,7 @@ PlasmoidItem {
     compactRepresentation: MouseArea {
         property bool wasExpanded: false
 
-        Layout.minimumWidth: row.implicitWidth + Kirigami.Units.smallSpacing * 2
+        Layout.minimumWidth: row.implicitWidth + Kirigami.Units.largeSpacing * 1.5 // + the panel's ~5 px: even ~17 px gaps, as macOS
         Layout.maximumWidth: Layout.minimumWidth
         Layout.fillHeight: true
 
@@ -88,7 +88,7 @@ PlasmoidItem {
                 font.pointSize: Kirigami.Theme.defaultFont.pointSize - 1 // as the menu bar's other text
             }
             BatteryGlyph {
-                Layout.preferredHeight: Kirigami.Units.iconSizes.small
+                Layout.preferredHeight: implicitHeight
                 Layout.preferredWidth: implicitWidth
                 percent: root.percent
                 charging: root.charging

@@ -60,7 +60,7 @@ PlasmoidItem {
             return m ? Number(m[1]) : 0;
         }
 
-        Layout.minimumWidth: (drawn ? glyph.implicitWidth : Kirigami.Units.iconSizes.small) + Kirigami.Units.smallSpacing * 2
+        Layout.minimumWidth: (drawn ? glyph.implicitWidth : Kirigami.Units.iconSizes.small) + Kirigami.Units.largeSpacing * 1.5 // + the panel's ~5 px: even ~17 px gaps, as macOS
         Layout.maximumWidth: Layout.minimumWidth
         Layout.fillHeight: true
         hoverEnabled: true
