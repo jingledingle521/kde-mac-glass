@@ -1,0 +1,1494 @@
+From 297c5a0e2fc5d3b4460393494368b8858a6c3a72 Mon Sep 17 00:00:00 2001
+From: Brhett <36874370+jingledingle521@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 21:40:29 -0500
+Subject: [PATCH 38/38] Finder: Google Drive, built on a bundled rclone
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+rclone v1.75.2 is now a submodule (3rdparty/rclone). When Go is
+available, CMake builds it and installs it privately under
+libexec/finder; otherwise Finder falls back to a system rclone.
+
+FinderCloud signs in with `rclone authorize drive`. Finder opens
+Google's page itself and shows its own result page, and the token goes
+straight into ~/.config/finder/rclone.conf (owner-only) without ever
+being printed. A Finder-written systemd user service mounts the drive
+at ~/Google Drive with a full VFS cache. Finder follows uploads,
+downloads and failed uploads through rclone's remote control API on a
+unix socket, and it notices when Google signs the account out.
+
+In the sidebar, Google Drive sits under Locations after AirDrop, with a
+spinner while syncing and a badge when it needs the user. Its menu
+offers Sign In Again, Open Google Drive on the Web and Disconnect, which
+stops the mount, clears the cache and revokes the token. "Connect Google
+Drive…" is in the "…" menu and the sidebar's empty-area menu.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .gitmodules                     |   4 +
+ 3rdparty/rclone                 |   1 +
+ CMakeLists.txt                  |   1 +
+ finder-extras/install.sh        |  12 +-
+ src/CMakeLists.txt              |  30 ++
+ src/finder/finderchrome.cpp     |   5 +
+ src/finder/findercloud.cpp      | 609 ++++++++++++++++++++++++++++++++
+ src/finder/findercloud.h        | 115 ++++++
+ src/finder/findercloudsheet.cpp | 201 +++++++++++
+ src/finder/findercloudsheet.h   |  42 +++
+ src/finder/findersidebar.cpp    | 171 ++++++++-
+ src/finder/findersidebar.h      |  11 +
+ 12 files changed, 1198 insertions(+), 4 deletions(-)
+ create mode 100644 .gitmodules
+ create mode 160000 3rdparty/rclone
+ create mode 100644 src/finder/findercloud.cpp
+ create mode 100644 src/finder/findercloud.h
+ create mode 100644 src/finder/findercloudsheet.cpp
+ create mode 100644 src/finder/findercloudsheet.h
+
+diff --git a/.gitmodules b/.gitmodules
+new file mode 100644
+index 000000000..61e6df525
+--- /dev/null
++++ b/.gitmodules
+@@ -0,0 +1,4 @@
++[submodule "3rdparty/rclone"]
++	path = 3rdparty/rclone
++	url = https://github.com/rclone/rclone
++	shallow = true
+diff --git a/3rdparty/rclone b/3rdparty/rclone
+new file mode 160000
+index 000000000..be8d6044e
+--- /dev/null
++++ b/3rdparty/rclone
+@@ -0,0 +1 @@
++Subproject commit be8d6044eacb843b74d335db0c5fbe09222031fe
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 756ed94d2..ff46bff73 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -60,6 +60,7 @@ find_package(Qt6 ${QT_MIN_VERSION} CONFIG REQUIRED COMPONENTS
+     Widgets
+     Gui
+     DBus
++    Network
+ )
+ 
+ if (Qt6Gui_VERSION VERSION_GREATER_EQUAL "6.10.0")
+diff --git a/finder-extras/install.sh b/finder-extras/install.sh
+index ddec510d6..0ffeea57a 100755
+--- a/finder-extras/install.sh
++++ b/finder-extras/install.sh
+@@ -5,7 +5,8 @@
+ #
+ #   finder-extras/install.sh           build and install
+ #   finder-extras/install.sh --deps    first install Dolphin's build
+-#                                      dependencies (Fedora; asks for your password)
++#                                      dependencies, plus Go and FUSE for the
++#                                      bundled rclone (Fedora; asks for your password)
+ set -euo pipefail
+ 
+ root=$(cd "$(dirname "$0")/.." && pwd)
+@@ -14,12 +15,21 @@ apps=${XDG_DATA_HOME:-$HOME/.local/share}/applications
+ 
+ if [ "${1:-}" = --deps ]; then
+     pkexec dnf -y builddep dolphin
++    pkexec dnf -y install golang fuse3
+ fi
+ 
+ for tool in cmake ninja g++; do
+     command -v "$tool" >/dev/null || { echo "missing $tool (try: $0 --deps)" >&2; exit 1; }
+ done
+ 
++# Google Drive runs on rclone, built from this submodule. Without it (or
++# without Go) Finder falls back to a system rclone.
++if [ -d "$root/.git" ] || [ -f "$root/.git" ]; then
++    git -C "$root" submodule update --init --depth 1 3rdparty/rclone \
++        || echo "Couldn't fetch rclone; Google Drive will need a system rclone."
++fi
++command -v go >/dev/null || echo "Go isn't installed: Finder won't bundle rclone (try: $0 --deps)."
++
+ cmake -S "$root" -B "$root/build" -G Ninja \
+     -DCMAKE_BUILD_TYPE=Release \
+     -DCMAKE_INSTALL_PREFIX="$prefix" \
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 2e3ddc895..375447d23 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -292,6 +292,8 @@ target_sources(dolphinstatic PRIVATE
+     finder/finderairdropservice.cpp
+     finder/finderairdropsheet.cpp
+     finder/findertransfers.cpp
++    finder/findercloud.cpp
++    finder/findercloudsheet.cpp
+     admin/bar.cpp
+     admin/workerintegration.cpp
+     animatedheightwidget.cpp
+@@ -492,6 +494,7 @@ target_sources(dolphinstatic PRIVATE
+ 
+ target_link_libraries(dolphinstatic
+     dolphinprivate
++    Qt::Network
+     KF6::CoreAddons
+     KF6::GuiAddons
+     KF6::KCMUtils
+@@ -577,6 +580,33 @@ target_link_libraries(finder-filechooser
+ )
+ install(TARGETS finder-filechooser ${KDE_INSTALL_TARGETS_DEFAULT_ARGS})
+ 
++# Finder's Google Drive runs on rclone, built from the 3rdparty/rclone
++# submodule and installed privately beside Finder (see finder/findercloud.h).
++# Without Go or the submodule, Finder falls back to a system rclone.
++option(FINDER_BUNDLE_RCLONE "Build rclone from 3rdparty/rclone for Finder's Google Drive" ON)
++find_program(GO_EXECUTABLE go)
++set(FINDER_RCLONE_SOURCE "${CMAKE_SOURCE_DIR}/3rdparty/rclone")
++if(FINDER_BUNDLE_RCLONE AND GO_EXECUTABLE AND EXISTS "${FINDER_RCLONE_SOURCE}/go.mod")
++    set(FINDER_RCLONE_BINARY "${CMAKE_CURRENT_BINARY_DIR}/rclone")
++    file(GLOB_RECURSE FINDER_RCLONE_GO CONFIGURE_DEPENDS "${FINDER_RCLONE_SOURCE}/*.go")
++    add_custom_command(
++        OUTPUT "${FINDER_RCLONE_BINARY}"
++        COMMAND ${CMAKE_COMMAND} -E env CGO_ENABLED=0 GOFLAGS=-mod=mod
++                "GOCACHE=${CMAKE_CURRENT_BINARY_DIR}/go-cache"
++                ${GO_EXECUTABLE} build -trimpath -ldflags "-s -w -X github.com/rclone/rclone/fs.VersionSuffix=finder" -o "${FINDER_RCLONE_BINARY}" .
++        WORKING_DIRECTORY "${FINDER_RCLONE_SOURCE}"
++        DEPENDS ${FINDER_RCLONE_GO} "${FINDER_RCLONE_SOURCE}/go.mod" "${FINDER_RCLONE_SOURCE}/go.sum"
++        COMMENT "Building rclone for Finder's Google Drive"
++        VERBATIM
++    )
++    add_custom_target(finder-rclone ALL DEPENDS "${FINDER_RCLONE_BINARY}")
++    install(PROGRAMS "${FINDER_RCLONE_BINARY}" DESTINATION "${KDE_INSTALL_LIBEXECDIR}/finder")
++    target_compile_definitions(dolphinstatic PRIVATE FINDER_RCLONE="${KDE_INSTALL_FULL_LIBEXECDIR}/finder/rclone")
++    message(STATUS "Finder: bundling rclone from ${FINDER_RCLONE_SOURCE}")
++else()
++    message(STATUS "Finder: not bundling rclone (needs Go and the 3rdparty/rclone submodule); Google Drive uses the system rclone")
++endif()
++
+ ##########################################
+ 
+ if(NOT WIN32)
+diff --git a/src/finder/finderchrome.cpp b/src/finder/finderchrome.cpp
+index bc393c4f5..7451a96b2 100644
+--- a/src/finder/finderchrome.cpp
++++ b/src/finder/finderchrome.cpp
+@@ -9,6 +9,7 @@
+ #include "findercolumnview.h"
+ #include "finderairdropservice.h"
+ #include "findersidebar.h"
++#include "findercloud.h"
+ #include "findertransfers.h"
+ 
+ #include "dolphinmainwindow.h"
+@@ -739,6 +740,10 @@ QToolButton *FinderChrome::createMoreButton(QToolBar *toolBar)
+                 FinderAirDrop::instance()->share(files, m_window);
+             }
+         });
++        if (m_finderSidebar && !FinderCloud::instance()->hasAccount()) {
++            menu->addAction(QIcon::fromTheme(QStringLiteral("folder-cloud")), i18nc("@action:inmenu Finder", "Connect Google Drive…"), m_finderSidebar,
++                            &FinderSidebar::connectCloud);
++        }
+         menu->addSeparator();
+         const QList<QStringList> sections = {
+             {QStringLiteral("create_dir"), QStringLiteral("new_menu")},
+diff --git a/src/finder/findercloud.cpp b/src/finder/findercloud.cpp
+new file mode 100644
+index 000000000..c2a662cc2
+--- /dev/null
++++ b/src/finder/findercloud.cpp
+@@ -0,0 +1,609 @@
++/*
++ * SPDX-FileCopyrightText: 2026 Brhett
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "findercloud.h"
++
++#include <KLocalizedString>
++
++#include <QDesktopServices>
++#include <QDir>
++#include <QFile>
++#include <QFileInfo>
++#include <QJsonArray>
++#include <QJsonDocument>
++#include <QJsonObject>
++#include <QLocalSocket>
++#include <QNetworkAccessManager>
++#include <QNetworkReply>
++#include <QNetworkRequest>
++#include <QProcess>
++#include <QRegularExpression>
++#include <QStandardPaths>
++#include <QStorageInfo>
++#include <QUrlQuery>
++
++namespace
++{
++const QString Remote = QStringLiteral("gdrive");
++const QString Unit = QStringLiteral("finder-google-drive.service");
++
++QString configPath()
++{
++    return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/finder/rclone.conf");
++}
++
++QString unitPath()
++{
++    return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/systemd/user/") + Unit;
++}
++
++QString cachePath()
++{
++    return QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation) + QStringLiteral("/finder/google-drive");
++}
++
++QString runtimeDir()
++{
++    const QString dir = qEnvironmentVariable("XDG_RUNTIME_DIR");
++    return dir.isEmpty() ? QDir::tempPath() : dir;
++}
++
++QString socketPath()
++{
++    return runtimeDir() + QStringLiteral("/finder-google-drive.sock");
++}
++
++// The token rclone stores, from the [gdrive] section of Finder's config.
++QByteArray storedToken()
++{
++    QFile file(configPath());
++    if (!file.open(QIODevice::ReadOnly)) {
++        return {};
++    }
++    bool inRemote = false;
++    while (!file.atEnd()) {
++        const QByteArray line = file.readLine().trimmed();
++        if (line.startsWith('[')) {
++            inRemote = line == '[' + Remote.toLatin1() + ']';
++        } else if (inRemote && line.startsWith("token")) {
++            const int eq = line.indexOf('=');
++            return eq < 0 ? QByteArray() : line.mid(eq + 1).trimmed();
++        }
++    }
++    return {};
++}
++
++// `rclone authorize` prints the token as JSON, or for some backends as a
++// base64 blob wrapping it.
++QByteArray tokenFromAuthorize(const QByteArray &out)
++{
++    const int start = out.indexOf("--->");
++    const int end = out.indexOf("<---End paste");
++    if (start < 0 || end < start) {
++        return {};
++    }
++    const QByteArray blob = out.mid(start + 4, end - start - 4).trimmed();
++    for (const QByteArray &candidate : {blob, QByteArray::fromBase64(blob)}) {
++        const QJsonObject object = QJsonDocument::fromJson(candidate).object();
++        if (object.contains(QLatin1String("access_token"))) {
++            return QJsonDocument(object).toJson(QJsonDocument::Compact);
++        }
++        if (object.value(QLatin1String("token")).isString()) {
++            return object.value(QLatin1String("token")).toString().toUtf8();
++        }
++    }
++    return {};
++}
++}
++
++FinderCloud *FinderCloud::instance()
++{
++    static FinderCloud *cloud = new FinderCloud;
++    return cloud;
++}
++
++FinderCloud::FinderCloud()
++{
++    if (hasAccount()) {
++        m_state = Starting;
++        // Keep the service in step with this build (say, a new rclone path);
++        // a running mount picks it up at the next login.
++        if (writeUnit()) {
++            systemctl({QStringLiteral("daemon-reload")});
++        }
++    }
++    m_pollTimer.setInterval(2000);
++    connect(&m_pollTimer, &QTimer::timeout, this, &FinderCloud::poll);
++    m_pollTimer.start();
++    QTimer::singleShot(0, this, &FinderCloud::poll);
++}
++
++QString FinderCloud::mountPath()
++{
++    return QDir::homePath() + QStringLiteral("/Google Drive");
++}
++
++QUrl FinderCloud::webUrl()
++{
++    return QUrl(QStringLiteral("https://drive.google.com/"));
++}
++
++QString FinderCloud::rclone() const
++{
++#ifdef FINDER_RCLONE
++    // The copy built from 3rdparty/rclone and installed with Finder.
++    if (QFileInfo(QStringLiteral(FINDER_RCLONE)).isExecutable()) {
++        return QStringLiteral(FINDER_RCLONE);
++    }
++#endif
++    return QStandardPaths::findExecutable(QStringLiteral("rclone"));
++}
++
++FinderCloud::State FinderCloud::state() const
++{
++    return m_state;
++}
++
++QString FinderCloud::errorText() const
++{
++    return m_error;
++}
++
++int FinderCloud::uploads() const
++{
++    return m_uploads;
++}
++
++int FinderCloud::downloads() const
++{
++    return m_downloads;
++}
++
++int FinderCloud::uploadErrors() const
++{
++    return m_uploadErrors;
++}
++
++bool FinderCloud::isBusy() const
++{
++    return m_state == Ready && (m_uploads > 0 || m_downloads > 0);
++}
++
++QString FinderCloud::activityText() const
++{
++    switch (m_state) {
++    case NotConnected:
++        return i18nc("@info Finder Google Drive", "Not connected");
++    case SigningIn:
++        return i18nc("@info Finder Google Drive", "Signing in…");
++    case Starting:
++        return i18nc("@info Finder Google Drive", "Connecting…");
++    case SignedOut:
++    case Failed:
++        return m_error;
++    case Ready:
++        break;
++    }
++    if (m_uploads > 0) {
++        return i18ncp("@info Finder Google Drive", "Uploading 1 file…", "Uploading %1 files…", m_uploads);
++    }
++    if (m_downloads > 0) {
++        return i18ncp("@info Finder Google Drive", "Downloading 1 file…", "Downloading %1 files…", m_downloads);
++    }
++    if (m_uploadErrors > 0) {
++        return i18ncp("@info Finder Google Drive", "1 file couldn't upload; retrying", "%1 files couldn't upload; retrying", m_uploadErrors);
++    }
++    return i18nc("@info Finder Google Drive", "Up to date");
++}
++
++void FinderCloud::setState(State state, const QString &error)
++{
++    if (state != Ready) {
++        m_uploads = m_downloads = m_uploadErrors = 0;
++    }
++    if (m_state == state && m_error == error) {
++        return;
++    }
++    m_state = state;
++    m_error = error;
++    Q_EMIT stateChanged(state);
++    Q_EMIT activityChanged();
++}
++
++bool FinderCloud::hasAccount() const
++{
++    return storedToken().contains("refresh_token");
++}
++
++void FinderCloud::writeConfig(const QByteArray &token)
++{
++    QDir().mkpath(QFileInfo(configPath()).absolutePath());
++    // Written beside the old file, owner-only from the start, then swapped in.
++    const QString temp = configPath() + QStringLiteral(".new");
++    QFile::remove(temp);
++    QFile file(temp);
++    if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly, QFileDevice::ReadOwner | QFileDevice::WriteOwner)) {
++        return;
++    }
++    file.write("[" + Remote.toLatin1() + "]\ntype = drive\nscope = drive\ntoken = " + token + "\n");
++    file.close();
++    QFile::remove(configPath());
++    QFile::rename(temp, configPath());
++}
++
++bool FinderCloud::writeUnit()
++{
++    const QString unit = QStringLiteral(
++                             "# Written by Finder; it rewrites this file, so edits here don't last.\n"
++                             "[Unit]\n"
++                             "Description=Google Drive for Finder\n"
++                             "After=network-online.target\n"
++                             "Wants=network-online.target\n"
++                             "\n"
++                             "[Service]\n"
++                             "Type=notify\n"
++                             "ExecStartPre=/usr/bin/mkdir -p \"%h/Google Drive\"\n"
++                             "ExecStartPre=-/usr/bin/rm -f %t/finder-google-drive.sock\n"
++                             "ExecStart=%1 mount %2: \"%h/Google Drive\" \\\n"
++                             "    --config \"%3\" \\\n"
++                             "    --cache-dir \"%C/finder/google-drive\" \\\n"
++                             "    --volname \"Google Drive\" \\\n"
++                             "    --vfs-cache-mode full \\\n"
++                             "    --vfs-cache-max-size 10G \\\n"
++                             "    --dir-cache-time 5m \\\n"
++                             "    --poll-interval 1m \\\n"
++                             "    --drive-export-formats docx,xlsx,pptx,svg \\\n"
++                             "    --rc --rc-addr unix://%t/finder-google-drive.sock\n"
++                             "ExecStop=/usr/bin/fusermount3 -uz \"%h/Google Drive\"\n"
++                             "Restart=on-failure\n"
++                             "RestartSec=10\n"
++                             "\n"
++                             "[Install]\n"
++                             "WantedBy=default.target\n")
++                             .arg(rclone(), Remote, configPath());
++    QFile file(unitPath());
++    if (file.open(QIODevice::ReadOnly) && file.readAll() == unit.toUtf8()) {
++        return false;
++    }
++    file.close();
++    QDir().mkpath(QFileInfo(unitPath()).absolutePath());
++    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
++        return false;
++    }
++    file.write(unit.toUtf8());
++    return true;
++}
++
++void FinderCloud::systemctl(const QStringList &args, std::function<void(bool ok)> done)
++{
++    auto *process = new QProcess(this);
++    connect(process, &QProcess::finished, this, [process, done](int code, QProcess::ExitStatus status) {
++        process->deleteLater();
++        if (done) {
++            done(status == QProcess::NormalExit && code == 0);
++        }
++    });
++    process->start(QStringLiteral("systemctl"), QStringList{QStringLiteral("--user")} + args);
++}
++
++void FinderCloud::signIn(std::function<void(bool ok, const QString &error)> done)
++{
++    if (m_authorize) {
++        m_signInDone = done; // already waiting on the browser
++        return;
++    }
++    const QString program = rclone();
++    if (program.isEmpty()) {
++        done(false, i18nc("@info Finder Google Drive", "Finder was built without rclone, and it isn't installed either."));
++        return;
++    }
++    const State before = m_state;
++    const QString beforeError = m_error;
++    m_signInDone = done;
++    m_signInUrl.clear();
++    setState(SigningIn);
++
++    auto *process = new QProcess(this);
++    m_authorize = process;
++    auto stderrText = std::make_shared<QByteArray>();
++    connect(process, &QProcess::readyReadStandardError, this, [this, process, stderrText]() {
++        const QByteArray chunk = process->readAllStandardError();
++        stderrText->append(chunk);
++        static const QRegularExpression link(QStringLiteral("(http://127\\.0\\.0\\.1:\\d+/auth\\?state=\\S+)"));
++        const QRegularExpressionMatch match = link.match(QString::fromUtf8(*stderrText));
++        if (match.hasMatch() && m_signInUrl.isEmpty()) {
++            m_signInUrl = QUrl(match.captured(1));
++            QDesktopServices::openUrl(m_signInUrl);
++            Q_EMIT signInUrlChanged(m_signInUrl);
++        }
++    });
++    connect(process, &QProcess::finished, this, [this, process, stderrText, before, beforeError](int code, QProcess::ExitStatus status) {
++        process->deleteLater();
++        m_signInUrl.clear();
++        auto done = std::exchange(m_signInDone, {});
++        const QByteArray token = status == QProcess::NormalExit && code == 0 ? tokenFromAuthorize(process->readAllStandardOutput()) : QByteArray();
++        if (token.isEmpty()) {
++            setState(before, beforeError);
++            QString error;
++            if (status == QProcess::NormalExit && process->property("cancelled").isNull()) {
++                const QString log = QString::fromUtf8(*stderrText);
++                if (log.contains(QLatin1String("access_denied"))) {
++                    error = i18nc("@info Finder Google Drive", "Google Drive wasn't connected because access wasn't allowed.");
++                } else {
++                    // rclone explains auth errors on a "Description:" line.
++                    static const QRegularExpression description(QStringLiteral("^Description: (.+)$"), QRegularExpression::MultilineOption);
++                    error = description.match(log).captured(1).trimmed();
++                    if (error.isEmpty()) {
++                        error = i18nc("@info Finder Google Drive", "Google didn't finish signing you in.");
++                    }
++                }
++            }
++            if (done) {
++                done(false, error);
++            }
++            return;
++        }
++        writeConfig(token);
++        writeUnit();
++        setState(Starting);
++        systemctl({QStringLiteral("daemon-reload")}, [this](bool) {
++            // restart, not start: a mount still running on an expired token
++            // has to pick up the new one.
++            systemctl({QStringLiteral("enable"), Unit});
++            systemctl({QStringLiteral("restart"), Unit});
++        });
++        if (done) {
++            done(true, {});
++        }
++    });
++    // Finder opens the page itself, and shows its own page when Google is done.
++    // --auto-confirm takes the default for rclone's follow-up questions (not a
++    // Shared Drive) instead of waiting on the terminal.
++    process->start(program,
++                   {QStringLiteral("authorize"), QStringLiteral("drive"), QStringLiteral("--auth-no-open-browser"), QStringLiteral("--auto-confirm"),
++                    QStringLiteral("--config"), configPath(), QStringLiteral("--template"), authTemplate()});
++    process->closeWriteChannel();
++}
++
++void FinderCloud::cancelSignIn()
++{
++    if (m_authorize) {
++        m_authorize->setProperty("cancelled", true);
++        m_authorize->kill();
++    }
++}
++
++QUrl FinderCloud::signInUrl() const
++{
++    return m_signInUrl;
++}
++
++void FinderCloud::start()
++{
++    if (!hasAccount() || m_state == Ready) {
++        return;
++    }
++    writeUnit();
++    systemctl({QStringLiteral("daemon-reload")}, [this](bool) {
++        systemctl({QStringLiteral("enable"), QStringLiteral("--now"), Unit});
++    });
++    setState(Starting);
++}
++
++void FinderCloud::disconnect()
++{
++    cancelSignIn();
++    const QByteArray token = storedToken();
++    setState(NotConnected);
++    systemctl({QStringLiteral("disable"), QStringLiteral("--now"), Unit}, [this](bool) {
++        QFile::remove(unitPath());
++        systemctl({QStringLiteral("daemon-reload")});
++        QFile::remove(configPath());
++        QDir(cachePath()).removeRecursively();
++        QDir().rmdir(mountPath()); // only if it's empty, i.e. unmounted
++    });
++
++    // Tell Google to forget the token too, so it can't be used again.
++    const QString refresh = QJsonDocument::fromJson(token).object().value(QLatin1String("refresh_token")).toString();
++    if (!refresh.isEmpty()) {
++        auto *network = new QNetworkAccessManager(this);
++        QNetworkRequest request(QUrl(QStringLiteral("https://oauth2.googleapis.com/revoke")));
++        request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/x-www-form-urlencoded"));
++        QUrlQuery form;
++        form.addQueryItem(QStringLiteral("token"), refresh);
++        QNetworkReply *reply = network->post(request, form.query(QUrl::FullyEncoded).toUtf8());
++        connect(reply, &QNetworkReply::finished, network, &QObject::deleteLater);
++    }
++}
++
++void FinderCloud::poll()
++{
++    if (m_state == SigningIn) {
++        return;
++    }
++    const bool account = hasAccount();
++    if (!account) {
++        if (m_state != NotConnected) {
++            setState(NotConnected); // disconnected from another window
++        }
++        return;
++    }
++    const QStorageInfo storage(mountPath());
++    const bool mounted = storage.isValid() && storage.rootPath() == mountPath() && storage.fileSystemType().startsWith("fuse.rclone");
++    if (mounted) {
++        setState(Ready);
++        requestStats();
++        return;
++    }
++    if (m_state == NotConnected || m_state == Ready) {
++        setState(Starting);
++    }
++    checkService();
++}
++
++void FinderCloud::checkService()
++{
++    if (m_checking) {
++        return;
++    }
++    // Signed out or failed: look again only now and then.
++    static int skipped = 0;
++    if ((m_state == SignedOut || m_state == Failed) && ++skipped % 5 != 0) {
++        return;
++    }
++    m_checking = true;
++    auto *process = new QProcess(this);
++    connect(process, &QProcess::finished, this, [this, process]() {
++        process->deleteLater();
++        QHash<QString, QString> props;
++        for (const QString &line : QString::fromUtf8(process->readAllStandardOutput()).split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
++            props.insert(line.section(QLatin1Char('='), 0, 0), line.section(QLatin1Char('='), 1));
++        }
++        const QString active = props.value(QStringLiteral("ActiveState"));
++        const QString sub = props.value(QStringLiteral("SubState"));
++        if (active == QLatin1String("active") || (active == QLatin1String("activating") && sub != QLatin1String("auto-restart"))) {
++            m_checking = false;
++            if (m_state != Ready) {
++                setState(Starting); // mounting
++            }
++            return;
++        }
++        if (active == QLatin1String("inactive") && props.value(QStringLiteral("Result")) == QLatin1String("success")) {
++            // Never started, or stopped by hand: start it.
++            m_checking = false;
++            if (m_state == Starting) {
++                start();
++            }
++            return;
++        }
++        // Failed, or failing and about to retry: the log says why.
++        auto *journal = new QProcess(this);
++        connect(journal, &QProcess::finished, this, [this, journal]() {
++            journal->deleteLater();
++            m_checking = false;
++            const QString log = QString::fromUtf8(journal->readAllStandardOutput());
++            static const QRegularExpression signedOut(QStringLiteral("invalid_grant|token expired|couldn't fetch token|empty token|unauthorized_client|Token has been expired or revoked"),
++                                                      QRegularExpression::CaseInsensitiveOption);
++            if (signedOut.match(log).hasMatch()) {
++                // No point retrying every 10 s with a dead token.
++                systemctl({QStringLiteral("stop"), Unit});
++                setState(SignedOut, i18nc("@info Finder Google Drive", "Google signed you out. Sign in again to keep syncing."));
++                return;
++            }
++            QString reason;
++            for (const QString &line : log.split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
++                if (line.contains(QLatin1String("ERROR")) || line.contains(QLatin1String("CRITICAL")) || line.startsWith(QLatin1String("Fatal"))) {
++                    reason = line.section(QStringLiteral(": "), 1).trimmed();
++                }
++            }
++            setState(Failed, reason.isEmpty() ? i18nc("@info Finder Google Drive", "Google Drive couldn't start.") : reason);
++        });
++        journal->start(QStringLiteral("journalctl"), {QStringLiteral("--user"), QStringLiteral("-u"), Unit, QStringLiteral("-n"), QStringLiteral("30"), QStringLiteral("-o"), QStringLiteral("cat"), QStringLiteral("--no-pager")});
++    });
++    process->start(QStringLiteral("systemctl"),
++                   {QStringLiteral("--user"), QStringLiteral("show"), QStringLiteral("-p"), QStringLiteral("ActiveState"), QStringLiteral("-p"),
++                    QStringLiteral("SubState"), QStringLiteral("-p"), QStringLiteral("Result"), Unit});
++}
++
++namespace
++{
++// One call to rclone's remote control API: HTTP/1.0 over the unix socket, so
++// the reply comes back whole, without chunking, and the socket then closes.
++void rcCall(QObject *context, const QString &method, std::function<void(const QJsonObject &)> done)
++{
++    auto *socket = new QLocalSocket(context);
++    auto finish = [socket, done]() {
++        if (socket->property("finished").toBool()) {
++            return;
++        }
++        socket->setProperty("finished", true);
++        const QByteArray reply = socket->property("reply").toByteArray() + socket->readAll();
++        const int body = reply.indexOf("\r\n\r\n");
++        done(reply.startsWith("HTTP/1.") && reply.contains(" 200 ") && body > 0 ? QJsonDocument::fromJson(reply.mid(body + 4)).object() : QJsonObject());
++        socket->deleteLater();
++    };
++    QObject::connect(socket, &QLocalSocket::connected, socket, [socket, method]() {
++        socket->write("POST /" + method.toLatin1()
++                      + " HTTP/1.0\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}");
++    });
++    QObject::connect(socket, &QLocalSocket::readyRead, socket, [socket]() {
++        socket->setProperty("reply", QByteArray(socket->property("reply").toByteArray() + socket->readAll()));
++    });
++    QObject::connect(socket, &QLocalSocket::disconnected, socket, finish);
++    QObject::connect(socket, &QLocalSocket::errorOccurred, socket, finish);
++    QTimer::singleShot(3000, socket, finish);
++    socket->connectToServer(socketPath());
++}
++}
++
++void FinderCloud::requestStats()
++{
++    if (m_statsPending) {
++        return;
++    }
++    m_statsPending = true;
++    rcCall(this, QStringLiteral("vfs/stats"), [this](const QJsonObject &vfs) {
++        rcCall(this, QStringLiteral("core/stats"), [this, vfs](const QJsonObject &core) {
++            m_statsPending = false;
++            if (m_state != Ready) {
++                return;
++            }
++            const QJsonObject cache = vfs.value(QLatin1String("diskCache")).toObject();
++            const int uploading = cache.value(QLatin1String("uploadsInProgress")).toInt();
++            const int uploads = uploading + cache.value(QLatin1String("uploadsQueued")).toInt();
++            const int errors = cache.value(QLatin1String("erroredFiles")).toInt();
++            // core/stats counts uploads among its transfers too.
++            const int downloads = qMax(0, int(core.value(QLatin1String("transferring")).toArray().size()) - uploading);
++            if (uploads != m_uploads || downloads != m_downloads || errors != m_uploadErrors) {
++                m_uploads = uploads;
++                m_downloads = downloads;
++                m_uploadErrors = errors;
++                Q_EMIT activityChanged();
++            }
++        });
++    });
++}
++
++QString FinderCloud::authTemplate()
++{
++    // The page Google sends the browser back to; a Go template for rclone.
++    const QString path = runtimeDir() + QStringLiteral("/finder-google-signin.html");
++    QFile file(path);
++    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
++        file.write(R"(<!DOCTYPE html>
++<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
++<title>{{ if .OK }}Google Drive is connected{{ else }}Couldn't connect Google Drive{{ end }}</title>
++<style>
++:root { color-scheme: light dark; --bg: #f5f5f7; --card: #fff; --text: #1d1d1f; --dim: #6e6e73; --accent: #0071e3; }
++@media (prefers-color-scheme: dark) { :root { --bg: #1c1c1e; --card: #2c2c2e; --text: #f5f5f7; --dim: #a1a1a6; --accent: #0a84ff; } }
++body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--text);
++       font: 15px/1.45 -apple-system, "SF Pro Text", Inter, "Noto Sans", sans-serif; }
++main { background: var(--card); border-radius: 16px; padding: 36px 40px; max-width: 420px; margin: 16px; text-align: center;
++       box-shadow: 0 10px 40px rgba(0,0,0,.12); }
++.mark { width: 56px; height: 56px; border-radius: 50%; margin: 0 auto 16px; display: grid; place-items: center; color: #fff;
++        font-size: 30px; background: {{ if .OK }}#34c759{{ else }}#ff9f0a{{ end }}; }
++h1 { font-size: 20px; margin: 0 0 8px; }
++p { margin: 0; color: var(--dim); }
++code { font-size: 13px; }
++</style></head>
++<body><main>
++{{ if .OK }}
++<div class="mark">&#10003;</div>
++<h1>Google Drive is connected</h1>
++<p>You can close this tab. Google Drive is in Finder's sidebar under Locations.</p>
++{{ else }}
++<div class="mark">!</div>
++<h1>Couldn't connect Google Drive</h1>
++<p>{{ .Name }}{{ if .Description }}: {{ .Description }}{{ end }}</p>
++<p>Close this tab and try again from Finder.</p>
++{{ end }}
++</main></body></html>
++)");
++    }
++    return path;
++}
++
++#include "moc_findercloud.cpp"
+diff --git a/src/finder/findercloud.h b/src/finder/findercloud.h
+new file mode 100644
+index 000000000..622115d6b
+--- /dev/null
++++ b/src/finder/findercloud.h
+@@ -0,0 +1,115 @@
++/*
++ * SPDX-FileCopyrightText: 2026 Brhett
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef FINDERCLOUD_H
++#define FINDERCLOUD_H
++
++#include <QObject>
++#include <QPointer>
++#include <QTimer>
++#include <QUrl>
++
++#include <functional>
++
++class QProcess;
++
++/**
++ * @brief Finder's Google Drive, run by rclone (built from 3rdparty/rclone).
++ *
++ * One per process. Signing in runs `rclone authorize drive`, which opens
++ * Google's consent page and hands back a token; Finder keeps it in its own
++ * rclone config (~/.config/finder/rclone.conf, owner-only). The drive is then
++ * mounted at ~/Google Drive by a systemd user service that Finder writes and
++ * enables, so it stays mounted while Finder is closed and comes back at login.
++ * Finder follows the mount through rclone's remote control API on a unix
++ * socket: pending uploads and downloads, and files that failed to upload.
++ */
++class FinderCloud : public QObject
++{
++    Q_OBJECT
++
++public:
++    enum State {
++        NotConnected, // no account
++        SigningIn, // waiting on the browser
++        Starting, // signed in, service not mounted yet
++        Ready, // mounted
++        SignedOut, // Google refused the token: sign in again
++        Failed, // the service failed for another reason
++    };
++    Q_ENUM(State)
++
++    static FinderCloud *instance();
++
++    /** ~/Google Drive, where the drive is mounted. */
++    static QString mountPath();
++    static QUrl webUrl();
++
++    /** The rclone binary Finder uses, or empty if there is none. */
++    QString rclone() const;
++
++    /** Signed in (even if signed out by Google since, or not mounted yet). */
++    bool hasAccount() const;
++    State state() const;
++    /** Why the state is SignedOut or Failed, in words. */
++    QString errorText() const;
++
++    /** Files waiting to upload or uploading, and files being downloaded. */
++    int uploads() const;
++    int downloads() const;
++    /** Files rclone gave up uploading (kept in the cache and retried). */
++    int uploadErrors() const;
++    bool isBusy() const;
++    /** "Up to date", "Uploading 3 files…", for the sidebar tooltip and menu. */
++    QString activityText() const;
++
++    /**
++     * Opens Google's sign-in page in the browser and waits for it. On success
++     * the drive is set up and started; @p done gets the error otherwise
++     * (empty when cancelled).
++     */
++    void signIn(std::function<void(bool ok, const QString &error)> done);
++    void cancelSignIn();
++    /** The sign-in page, while signing in, to open it again. */
++    QUrl signInUrl() const;
++
++    /** Starts the mount if it isn't running (it normally starts at login). */
++    void start();
++    /** Stops the mount and forgets the account: token, service and local cache. */
++    void disconnect();
++
++Q_SIGNALS:
++    void stateChanged(FinderCloud::State state);
++    void activityChanged();
++    void signInUrlChanged(const QUrl &url);
++
++private:
++    FinderCloud();
++    void setState(State state, const QString &error = {});
++    void writeConfig(const QByteArray &token);
++    bool writeUnit();
++    void systemctl(const QStringList &args, std::function<void(bool ok)> done = {});
++    void poll();
++    void checkService();
++    void requestStats();
++    QString authTemplate();
++
++    State m_state = NotConnected;
++    QString m_error;
++    QTimer m_pollTimer;
++    bool m_checking = false; // a systemctl/journal check is running
++    bool m_statsPending = false;
++
++    QPointer<QProcess> m_authorize;
++    QUrl m_signInUrl;
++    std::function<void(bool, const QString &)> m_signInDone;
++
++    int m_uploads = 0;
++    int m_downloads = 0;
++    int m_uploadErrors = 0;
++};
++
++#endif
+diff --git a/src/finder/findercloudsheet.cpp b/src/finder/findercloudsheet.cpp
+new file mode 100644
+index 000000000..13c982782
+--- /dev/null
++++ b/src/finder/findercloudsheet.cpp
+@@ -0,0 +1,201 @@
++/*
++ * SPDX-FileCopyrightText: 2026 Brhett
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "findercloudsheet.h"
++#include "findercloud.h"
++
++#include <KLocalizedString>
++
++#include <QDesktopServices>
++#include <QHBoxLayout>
++#include <QIcon>
++#include <QLabel>
++#include <QPointer>
++#include <QPushButton>
++#include <QStackedWidget>
++#include <QTimer>
++#include <QVBoxLayout>
++
++namespace
++{
++QLabel *driveGlyph(QWidget *parent, int size)
++{
++    auto *label = new QLabel(parent);
++    QIcon icon = QIcon::fromTheme(QStringLiteral("folder-google-drive"), QIcon::fromTheme(QStringLiteral("folder-cloud")));
++    label->setPixmap(icon.pixmap(QSize(size, size), parent->devicePixelRatioF()));
++    label->setAlignment(Qt::AlignCenter);
++    return label;
++}
++
++QLabel *heading(const QString &text, QWidget *parent)
++{
++    auto *label = new QLabel(text, parent);
++    QFont font = label->font();
++    font.setWeight(QFont::DemiBold);
++    font.setPointSizeF(font.pointSizeF() * 1.15);
++    label->setFont(font);
++    label->setAlignment(Qt::AlignCenter);
++    label->setWordWrap(true);
++    return label;
++}
++
++QLabel *bodyText(const QString &text, QWidget *parent)
++{
++    auto *label = new QLabel(text, parent);
++    label->setWordWrap(true);
++    label->setAlignment(Qt::AlignCenter);
++    label->setStyleSheet(QStringLiteral("color: rgba(255, 255, 255, 180);"));
++    return label;
++}
++}
++
++FinderCloudSheet::FinderCloudSheet(QWidget *parent)
++    : QDialog(parent)
++{
++    setWindowTitle(i18nc("@title:window", "Google Drive"));
++    setModal(true);
++    setMinimumWidth(520);
++
++    auto *layout = new QVBoxLayout(this);
++    layout->setContentsMargins(24, 22, 24, 18);
++    m_pages = new QStackedWidget(this);
++    layout->addWidget(m_pages);
++
++    auto *cloud = FinderCloud::instance();
++    const bool again = cloud->state() == FinderCloud::SignedOut;
++
++    // Page 1: what connecting does.
++    auto *intro = new QWidget(m_pages);
++    auto *i = new QVBoxLayout(intro);
++    i->setSpacing(10);
++    i->addWidget(driveGlyph(intro, 64));
++    i->addWidget(heading(again ? i18nc("@title Finder Google Drive", "Sign in to Google Drive again")
++                               : i18nc("@title Finder Google Drive", "Connect Google Drive"),
++                         intro));
++    i->addWidget(bodyText(again ? cloud->errorText() + QLatin1Char(' ')
++                                      + i18nc("@info Finder Google Drive", "Changes you made meanwhile are kept on this computer and upload once you're back.")
++                                : i18nc("@info Finder Google Drive",
++                                        "Your Drive shows up in the sidebar as a folder that works with every app. "
++                                        "Files you open are kept on this computer, and changes sync back to Google. "
++                                        "Google Docs, Sheets and Slides open as Word, Excel and PowerPoint files."),
++                          intro));
++    m_error = new QLabel(intro);
++    m_error->setAlignment(Qt::AlignCenter);
++    m_error->setWordWrap(true);
++    m_error->setStyleSheet(QStringLiteral("color: #ff9f0a;"));
++    m_error->hide();
++    i->addWidget(m_error);
++    auto *buttons = new QHBoxLayout;
++    buttons->addStretch(1);
++    auto *cancel = new QPushButton(i18nc("@action:button", "Cancel"), intro);
++    connect(cancel, &QPushButton::clicked, this, &QDialog::reject);
++    buttons->addWidget(cancel);
++    m_signInButton = new QPushButton(i18nc("@action:button Finder Google Drive", "Sign In with Google…"), intro);
++    m_signInButton->setDefault(true);
++    connect(m_signInButton, &QPushButton::clicked, this, &FinderCloudSheet::signIn);
++    buttons->addWidget(m_signInButton);
++    i->addLayout(buttons);
++    m_pages->addWidget(intro);
++
++    // Page 2: waiting on the browser.
++    auto *waiting = new QWidget(m_pages);
++    auto *w = new QVBoxLayout(waiting);
++    w->setSpacing(10);
++    w->addWidget(driveGlyph(waiting, 64));
++    w->addWidget(heading(i18nc("@title Finder Google Drive", "Continue in your browser"), waiting));
++    w->addWidget(bodyText(i18nc("@info Finder Google Drive",
++                                "Choose your Google account and allow access to Drive. "
++                                "When the page says Google Drive is connected, come back here."),
++                          waiting));
++    auto *row = new QHBoxLayout;
++    auto *reopen = new QPushButton(i18nc("@action:button Finder Google Drive", "Open the Page Again"), waiting);
++    reopen->setEnabled(false);
++    connect(reopen, &QPushButton::clicked, this, []() {
++        QDesktopServices::openUrl(FinderCloud::instance()->signInUrl());
++    });
++    connect(cloud, &FinderCloud::signInUrlChanged, reopen, [reopen](const QUrl &url) {
++        reopen->setEnabled(url.isValid());
++    });
++    row->addWidget(reopen);
++    row->addStretch(1);
++    auto *stop = new QPushButton(i18nc("@action:button", "Cancel"), waiting);
++    connect(stop, &QPushButton::clicked, this, &QDialog::reject);
++    row->addWidget(stop);
++    w->addLayout(row);
++    m_pages->addWidget(waiting);
++
++    // Page 3: signed in, waiting for the drive to mount.
++    auto *settingUp = new QWidget(m_pages);
++    auto *s = new QVBoxLayout(settingUp);
++    s->setSpacing(10);
++    s->addWidget(driveGlyph(settingUp, 64));
++    s->addWidget(heading(i18nc("@title Finder Google Drive", "Setting up Google Drive…"), settingUp));
++    m_settingUp = bodyText(i18nc("@info Finder Google Drive", "Connecting to your Drive. This takes a few seconds."), settingUp);
++    s->addWidget(m_settingUp);
++    m_pages->addWidget(settingUp);
++
++    connect(cloud, &FinderCloud::stateChanged, this, [this](FinderCloud::State state) {
++        if (!m_waitingForMount) {
++            return;
++        }
++        if (state == FinderCloud::Ready) {
++            accept();
++        } else if (state == FinderCloud::Failed || state == FinderCloud::SignedOut) {
++            m_waitingForMount = false;
++            showError(FinderCloud::instance()->errorText());
++        }
++    });
++}
++
++FinderCloudSheet::~FinderCloudSheet()
++{
++    // Closed while the browser was still open.
++    if (m_pages->currentIndex() == 1) {
++        FinderCloud::instance()->cancelSignIn();
++    }
++}
++
++void FinderCloudSheet::signIn()
++{
++    m_error->hide();
++    m_pages->setCurrentIndex(1);
++    FinderCloud::instance()->signIn([sheet = QPointer<FinderCloudSheet>(this)](bool ok, const QString &error) {
++        if (!sheet) {
++            return;
++        }
++        if (!ok) {
++            if (error.isEmpty()) {
++                sheet->reject(); // cancelled
++            } else {
++                sheet->showError(error);
++            }
++            return;
++        }
++        sheet->m_pages->setCurrentIndex(2);
++        if (FinderCloud::instance()->state() == FinderCloud::Ready) {
++            sheet->accept();
++            return;
++        }
++        sheet->m_waitingForMount = true;
++        QTimer::singleShot(45000, sheet, [sheet]() {
++            if (sheet && sheet->m_waitingForMount) {
++                sheet->m_settingUp->setText(i18nc("@info Finder Google Drive",
++                                                  "This is taking longer than usual. You can close this; "
++                                                  "Google Drive appears in the sidebar once it's ready."));
++            }
++        });
++    });
++}
++
++void FinderCloudSheet::showError(const QString &error)
++{
++    m_pages->setCurrentIndex(0);
++    m_signInButton->setText(i18nc("@action:button Finder Google Drive", "Try Again"));
++    m_error->setText(error);
++    m_error->setVisible(!error.isEmpty());
++}
++
++#include "moc_findercloudsheet.cpp"
+diff --git a/src/finder/findercloudsheet.h b/src/finder/findercloudsheet.h
+new file mode 100644
+index 000000000..8a618ab19
+--- /dev/null
++++ b/src/finder/findercloudsheet.h
+@@ -0,0 +1,42 @@
++/*
++ * SPDX-FileCopyrightText: 2026 Brhett
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef FINDERCLOUDSHEET_H
++#define FINDERCLOUDSHEET_H
++
++#include <QDialog>
++
++class QLabel;
++class QPushButton;
++class QStackedWidget;
++
++/**
++ * @brief The sheet that connects Google Drive (or signs in again).
++ *
++ * Explains what connecting does, then opens Google's sign-in page in the
++ * browser and waits for it, then waits for the drive to mount. Accepted once
++ * ~/Google Drive is ready to open.
++ */
++class FinderCloudSheet : public QDialog
++{
++    Q_OBJECT
++
++public:
++    explicit FinderCloudSheet(QWidget *parent);
++    ~FinderCloudSheet() override;
++
++private:
++    void signIn();
++    void showError(const QString &error);
++
++    QStackedWidget *m_pages;
++    QPushButton *m_signInButton;
++    QLabel *m_error;
++    QLabel *m_settingUp;
++    bool m_waitingForMount = false;
++};
++
++#endif
+diff --git a/src/finder/findersidebar.cpp b/src/finder/findersidebar.cpp
+index 829f17ffc..9b521654f 100644
+--- a/src/finder/findersidebar.cpp
++++ b/src/finder/findersidebar.cpp
+@@ -6,18 +6,25 @@
+ 
+ #include "findersidebar.h"
+ #include "finderairdrop.h"
++#include "findercloud.h"
++#include "findercloudsheet.h"
+ 
+ #include <KFilePlacesModel>
+ #include <KLocalizedString>
+ 
+ #include <QAction>
+ #include <QContextMenuEvent>
++#include <QDesktopServices>
+ #include <QIcon>
+ #include <QMenu>
++#include <QMessageBox>
+ #include <QPainter>
+ #include <QPainterPath>
++#include <QPushButton>
+ #include <QStandardItemModel>
+ #include <QStyledItemDelegate>
++#include <QTime>
++#include <QTimer>
+ 
+ namespace
+ {
+@@ -111,13 +118,38 @@ public:
+         const int iconX = int(pill.left()) + 8;
+         p->drawPixmap(QPoint(iconX, r.top() + (r.height() - IconSize) / 2), pm);
+ 
++        // Google Drive: a spinner while syncing or connecting, a badge when
++        // it needs the user.
++        int statusWidth = 0;
++        if (index.data(FinderSidebar::CloudRole).toBool()) {
++            const auto *cloud = FinderCloud::instance();
++            const QRectF badge(pill.right() - 8 - 12, r.top() + (r.height() - 12) / 2.0, 12, 12);
++            if (cloud->state() == FinderCloud::SignedOut || cloud->state() == FinderCloud::Failed) {
++                p->setPen(Qt::NoPen);
++                p->setBrush(QColor(0xff, 0x9f, 0x0a));
++                p->drawEllipse(badge);
++                p->setPen(QPen(QColor(30, 30, 30), 1.6, Qt::SolidLine, Qt::RoundCap));
++                p->drawLine(QPointF(badge.center().x(), badge.top() + 3), QPointF(badge.center().x(), badge.center().y() + 1));
++                p->drawPoint(QPointF(badge.center().x(), badge.bottom() - 2.8));
++                statusWidth = 20;
++            } else if (cloud->isBusy() || cloud->state() == FinderCloud::Starting) {
++                const int angle = (QTime::currentTime().msecsSinceStartOfDay() % 1000) * 360 / 1000;
++                p->setBrush(Qt::NoBrush);
++                p->setPen(QPen(QColor(255, 255, 255, 60), 1.8));
++                p->drawEllipse(badge.adjusted(1, 1, -1, -1));
++                p->setPen(QPen(QColor(255, 255, 255, 190), 1.8, Qt::SolidLine, Qt::RoundCap));
++                p->drawArc(badge.adjusted(1, 1, -1, -1), -angle * 16, 100 * 16);
++                statusWidth = 20;
++            }
++        }
++
+         p->setPen(TextColor);
+         QFont font = option.font;
+         if (option.state & QStyle::State_Selected) {
+             font.setWeight(QFont::DemiBold); // Finder bolds the current place
+         }
+         p->setFont(font);
+-        const QRect textRect(iconX + IconSize + 8, r.top(), int(pill.right()) - (iconX + IconSize + 8) - 6, r.height());
++        const QRect textRect(iconX + IconSize + 8, r.top(), int(pill.right()) - (iconX + IconSize + 8) - 6 - statusWidth, r.height());
+         p->drawText(textRect, Qt::AlignVCenter | Qt::AlignLeft,
+                     QFontMetrics(font).elidedText(index.data(Qt::DisplayRole).toString(), Qt::ElideRight, textRect.width()));
+         p->restore();
+@@ -129,6 +161,7 @@ FinderSidebar::FinderSidebar(KFilePlacesModel *places, QWidget *parent)
+     : QListView(parent)
+     , m_places(places)
+     , m_model(new QStandardItemModel(this))
++    , m_spinner(new QTimer(this))
+ {
+     setModel(m_model);
+     setItemDelegate(new SidebarDelegate(this));
+@@ -155,6 +188,21 @@ FinderSidebar::FinderSidebar(KFilePlacesModel *places, QWidget *parent)
+         }
+         m_pendingSetup = QPersistentModelIndex();
+     });
++
++    auto *cloud = FinderCloud::instance();
++    connect(cloud, &FinderCloud::stateChanged, this, [this](FinderCloud::State state) {
++        rebuild();
++        if (state == FinderCloud::Ready && m_pendingCloud) {
++            const QUrl url = QUrl::fromLocalFile(FinderCloud::mountPath());
++            m_pendingCloud == 2 ? Q_EMIT tabRequested(url) : Q_EMIT placeActivated(url);
++            m_pendingCloud = 0;
++        } else if (state == FinderCloud::SignedOut || state == FinderCloud::Failed || state == FinderCloud::NotConnected) {
++            m_pendingCloud = 0;
++        }
++    });
++    connect(cloud, &FinderCloud::activityChanged, this, &FinderSidebar::updateCloud);
++    m_spinner->setInterval(33);
++    connect(m_spinner, &QTimer::timeout, viewport(), qOverload<>(&QWidget::update));
+     rebuild();
+ }
+ 
+@@ -181,6 +229,8 @@ void FinderSidebar::rebuild()
+             label = i18nc("@item:inlistbox Finder sidebar", "Recents");
+         } else if (group == KFilePlacesModel::SearchForType || group == KFilePlacesModel::TagsType) {
+             continue;
++        } else if (url.isLocalFile() && url.toLocalFile() == FinderCloud::mountPath()) {
++            continue; // the drive's mount (or a bookmark of it); listed below as Google Drive
+         }
+ 
+         auto *item = new QStandardItem(label);
+@@ -228,11 +278,110 @@ void FinderSidebar::rebuild()
+             airDrop->setData(AirDropUrl(), UrlRole);
+             m_model->appendRow(airDrop);
+         }
++        // Cloud storage follows AirDrop, as in Finder.
++        if (FinderCloud::instance()->hasAccount()) {
++            auto *drive = new QStandardItem(i18nc("@item:inlistbox Finder sidebar", "Google Drive"));
++            const QString icon = QStringLiteral("folder-google-drive-symbolic");
++            drive->setData(QIcon::hasThemeIcon(icon) ? icon : QStringLiteral("folder-cloud-symbolic"), Qt::DecorationRole);
++            drive->setData(QUrl::fromLocalFile(FinderCloud::mountPath()), UrlRole);
++            drive->setData(true, CloudRole);
++            m_model->appendRow(drive);
++        }
+         for (auto *item : std::as_const(locations)) {
+             m_model->appendRow(item);
+         }
+     }
+     setUrl(m_url);
++    updateCloud();
++}
++
++void FinderSidebar::updateCloud()
++{
++    const auto *cloud = FinderCloud::instance();
++    for (int row = 0; row < m_model->rowCount(); ++row) {
++        if (QStandardItem *item = m_model->item(row); item->data(CloudRole).toBool()) {
++            item->setToolTip(i18nc("@info:tooltip Finder sidebar, %1 is e.g. Up to date", "Google Drive — %1", cloud->activityText()));
++        }
++    }
++    const bool spinning = cloud->hasAccount() && (cloud->isBusy() || cloud->state() == FinderCloud::Starting);
++    if (spinning && !m_spinner->isActive()) {
++        m_spinner->start();
++    } else if (!spinning) {
++        m_spinner->stop();
++    }
++    viewport()->update();
++}
++
++void FinderSidebar::connectCloud()
++{
++    auto *sheet = new FinderCloudSheet(window());
++    sheet->setAttribute(Qt::WA_DeleteOnClose);
++    connect(sheet, &QDialog::accepted, this, [this]() {
++        Q_EMIT placeActivated(QUrl::fromLocalFile(FinderCloud::mountPath()));
++    });
++    sheet->open();
++}
++
++void FinderSidebar::activateCloud(bool newTab)
++{
++    auto *cloud = FinderCloud::instance();
++    switch (cloud->state()) {
++    case FinderCloud::Ready: {
++        const QUrl url = QUrl::fromLocalFile(FinderCloud::mountPath());
++        newTab ? Q_EMIT tabRequested(url) : Q_EMIT placeActivated(url);
++        return;
++    }
++    case FinderCloud::SignedOut:
++        connectCloud();
++        return;
++    case FinderCloud::NotConnected:
++    case FinderCloud::SigningIn:
++        return;
++    case FinderCloud::Starting:
++    case FinderCloud::Failed:
++        // Open it as soon as it's mounted.
++        m_pendingCloud = newTab ? 2 : 1;
++        cloud->start();
++        return;
++    }
++}
++
++void FinderSidebar::cloudMenu(QMenu &menu)
++{
++    auto *cloud = FinderCloud::instance();
++    QAction *status = menu.addAction(cloud->activityText());
++    status->setEnabled(false);
++    menu.addSeparator();
++    if (cloud->state() == FinderCloud::SignedOut) {
++        menu.addAction(QIcon::fromTheme(QStringLiteral("im-user-online")), i18nc("@action:inmenu Finder Google Drive", "Sign In Again…"), this, &FinderSidebar::connectCloud);
++    } else if (cloud->state() == FinderCloud::Failed) {
++        menu.addAction(QIcon::fromTheme(QStringLiteral("view-refresh")), i18nc("@action:inmenu Finder Google Drive", "Try Again"), cloud, &FinderCloud::start);
++    }
++    menu.addAction(QIcon::fromTheme(QStringLiteral("internet-web-browser")), i18nc("@action:inmenu Finder Google Drive", "Open Google Drive on the Web"), this, []() {
++        QDesktopServices::openUrl(FinderCloud::webUrl());
++    });
++    menu.addSeparator();
++    menu.addAction(QIcon::fromTheme(QStringLiteral("network-disconnect")), i18nc("@action:inmenu Finder Google Drive", "Disconnect Google Drive…"), this, [this]() {
++        auto *cloud = FinderCloud::instance();
++        QString text = i18nc("@info Finder Google Drive",
++                             "Your files stay in Google Drive. Finder removes the drive from this computer, along with its local copies, "
++                             "and signs this computer out.");
++        if (cloud->uploads() > 0 || cloud->uploadErrors() > 0) {
++            text = i18ncp("@info Finder Google Drive",
++                          "1 file hasn't finished uploading. If you disconnect now, the changes to it are lost.",
++                          "%1 files haven't finished uploading. If you disconnect now, the changes to them are lost.",
++                          cloud->uploads() + cloud->uploadErrors());
++        }
++        QMessageBox box(QMessageBox::Warning, i18nc("@title:window", "Disconnect Google Drive?"), i18nc("@title Finder Google Drive", "Disconnect Google Drive?"),
++                        QMessageBox::Cancel, window());
++        box.setInformativeText(text);
++        QPushButton *disconnect = box.addButton(i18nc("@action:button Finder Google Drive", "Disconnect"), QMessageBox::DestructiveRole);
++        box.setDefaultButton(QMessageBox::Cancel);
++        box.exec();
++        if (box.clickedButton() == disconnect) {
++            cloud->disconnect();
++        }
++    });
+ }
+ 
+ void FinderSidebar::setAirDropShown(bool shown)
+@@ -276,6 +425,10 @@ void FinderSidebar::activate(const QModelIndex &index, bool newTab)
+         Q_EMIT airDropRequested();
+         return;
+     }
++    if (index.data(CloudRole).toBool()) {
++        activateCloud(newTab);
++        return;
++    }
+     const QModelIndex place = placeIndex(index);
+     if (!place.isValid()) {
+         return;
+@@ -318,16 +471,28 @@ void FinderSidebar::contextMenuEvent(QContextMenuEvent *event)
+ {
+     const QModelIndex index = indexAt(event->pos());
+     const QModelIndex place = placeIndex(index);
+-    if (!place.isValid()) {
++    const bool cloud = index.data(CloudRole).toBool();
++    QMenu menu(this);
++    if (!place.isValid() && !cloud) {
++        // Empty space or a heading: offer the drive if there isn't one.
++        if (!FinderCloud::instance()->hasAccount()) {
++            menu.addAction(QIcon::fromTheme(QStringLiteral("folder-cloud")), i18nc("@action:inmenu Finder", "Connect Google Drive…"), this, &FinderSidebar::connectCloud);
++            menu.exec(event->globalPos());
++        }
+         return;
+     }
+-    QMenu menu(this);
+     menu.addAction(QIcon::fromTheme(QStringLiteral("folder-open")), i18nc("@action:inmenu", "Open"), this, [this, index]() {
+         activate(index, false);
+     });
+     menu.addAction(QIcon::fromTheme(QStringLiteral("tab-new")), i18nc("@action:inmenu", "Open in New Tab"), this, [this, index]() {
+         activate(index, true);
+     });
++    if (cloud) {
++        menu.addSeparator();
++        cloudMenu(menu);
++        menu.exec(event->globalPos());
++        return;
++    }
+     if (QAction *teardown = m_places->teardownActionForIndex(place)) {
+         menu.addSeparator();
+         teardown->setParent(&menu);
+diff --git a/src/finder/findersidebar.h b/src/finder/findersidebar.h
+index b8ef9f0d9..2239424ad 100644
+--- a/src/finder/findersidebar.h
++++ b/src/finder/findersidebar.h
+@@ -12,6 +12,8 @@
+ #include <QUrl>
+ 
+ class KFilePlacesModel;
++class QMenu;
++class QTimer;
+ class QStandardItemModel;
+ 
+ /**
+@@ -38,10 +40,14 @@ public:
+     /** Whether to list AirDrop (not in the file chooser). */
+     void setAirDropShown(bool shown);
+ 
++    /** Opens the sheet that connects Google Drive, then opens the drive. */
++    void connectCloud();
++
+     enum Roles {
+         UrlRole = Qt::UserRole + 1,
+         HeaderRole,
+         PlaceIndexRole, // row in the places model
++        CloudRole, // the Google Drive item (FinderCloud)
+     };
+ 
+ Q_SIGNALS:
+@@ -59,6 +65,9 @@ protected:
+ private:
+     void rebuild();
+     void activate(const QModelIndex &index, bool newTab);
++    void activateCloud(bool newTab);
++    void cloudMenu(QMenu &menu);
++    void updateCloud();
+     QModelIndex placeIndex(const QModelIndex &row) const;
+ 
+     KFilePlacesModel *m_places;
+@@ -67,6 +76,8 @@ private:
+     QPersistentModelIndex m_pendingSetup; // device being mounted before opening
+     bool m_pendingSetupNewTab = false;
+     bool m_airDropShown = true;
++    int m_pendingCloud = 0; // open the drive once mounted: 1 here, 2 in a new tab
++    QTimer *m_spinner; // animates the drive's activity indicator
+ };
+ 
+ #endif
+-- 
+2.56.0
+

@@ -1,7 +1,7 @@
 From a71ace931433750b8f921c665d5b473a85c2c7b0 Mon Sep 17 00:00:00 2001
 From: Brhett <36874370+jingledingle521@users.noreply.github.com>
 Date: Sun, 18 Oct 2026 21:24:25 -0500
-Subject: [PATCH 36/37] Finder: window chrome before setupGUI (fixes black
+Subject: [PATCH 36/38] Finder: window chrome before setupGUI (fixes black
  corners)
 
 setupGUI() restores the saved window size, which creates the native

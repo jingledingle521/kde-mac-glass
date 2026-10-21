@@ -1,7 +1,7 @@
 From 9fd2b6f95451fee5e60add89edafacff76ffc005 Mon Sep 17 00:00:00 2001
 From: Brhett <36874370+jingledingle521@users.noreply.github.com>
 Date: Sun, 18 Oct 2026 12:32:48 -0500
-Subject: [PATCH 16/37] Finder sidebar: highlight a place only when showing
+Subject: [PATCH 16/38] Finder sidebar: highlight a place only when showing
  that exact folder
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

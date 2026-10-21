@@ -4,7 +4,8 @@
 # app with its own settings (finderrc) and toolbar layout.
 #
 #   build-finder            build and install into ~/.local/opt/finder
-#   build-finder --deps     first install Dolphin's build dependencies (asks
+#   build-finder --deps     first install Dolphin's build dependencies, and Go
+#                           and FUSE for Google Drive's bundled rclone (asks
 #                           for your password through the KDE root prompt)
 set -euo pipefail
 
@@ -14,6 +15,7 @@ src=${XDG_CACHE_HOME:-$HOME/.cache}/mac-glass-kde/finder-src
 
 if [ "${1:-}" = --deps ]; then
     pkexec dnf -y builddep dolphin
+    pkexec dnf -y install golang fuse3
 fi
 
 for tool in git cmake ninja g++; do

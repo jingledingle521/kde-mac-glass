@@ -1,7 +1,7 @@
 From 4bc2c438192be6388ffc4304f8b7cac5669a1999 Mon Sep 17 00:00:00 2001
 From: Brhett <36874370+jingledingle521@users.noreply.github.com>
 Date: Sun, 18 Oct 2026 14:35:10 -0500
-Subject: [PATCH 26/37] Finder: zebra stripes follow the layout instantly; hide
+Subject: [PATCH 26/38] Finder: zebra stripes follow the layout instantly; hide
  + without tabs
 
 The view now draws all list stripes from the layouter's row positions and
