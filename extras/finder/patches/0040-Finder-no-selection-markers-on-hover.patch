@@ -1,7 +1,7 @@
 From 56eef1c9dcd909981ec797ec3fd8e29dbb82917d Mon Sep 17 00:00:00 2001
 From: Brhett <36874370+jingledingle521@users.noreply.github.com>
 Date: Tue, 20 Oct 2026 22:52:37 -0500
-Subject: [PATCH 40/42] Finder: no "+" selection markers on hover
+Subject: [PATCH 40/45] Finder: no "+" selection markers on hover
 
 macOS Finder has none, so ShowSelectionToggle now defaults to off.
 Ctrl-click, Shift-click and rubber-band selection are unchanged.

@@ -1,7 +1,7 @@
 From f50e14ae302b04e86e2e234afe3f2cfd226ad4fd Mon Sep 17 00:00:00 2001
 From: Brhett <36874370+jingledingle521@users.noreply.github.com>
 Date: Sun, 18 Oct 2026 14:39:46 -0500
-Subject: [PATCH 27/42] Finder column view: path highlight, tidy preview; real
+Subject: [PATCH 27/45] Finder column view: path highlight, tidy preview; real
  folders stay folders
 
 - The current item and the folders leading to it are always highlighted

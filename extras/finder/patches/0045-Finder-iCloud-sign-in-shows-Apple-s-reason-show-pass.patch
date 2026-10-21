@@ -1,0 +1,163 @@
+From 89de75929b63ecf12bcbe9b528b3dc61fb553df6 Mon Sep 17 00:00:00 2001
+From: Brhett <36874370+jingledingle521@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 23:40:18 -0500
+Subject: [PATCH 45/45] Finder: iCloud sign-in shows Apple's reason;
+ show-password eye
+
+Apple refuses a locked account (code -20209) with the same 403 as a
+wrong password, and rclone reported both as "incorrect username or
+password". 3rdparty/rclone-patches keeps Apple's reply in the error. The
+build applies it to the rclone submodule (ignore = dirty), and the sheet
+shows Apple's message, e.g. "This Apple Account has been locked for
+security reasons".
+
+Also:
+- the password field gets an eye to show what was typed;
+- failed iCloud sign-ins log rclone's full output to the journal (the
+  password is never in it).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .gitmodules                                   |  1 +
+ ...Apple-s-reason-for-a-refused-sign-in.patch | 21 ++++++++++++++++
+ src/CMakeLists.txt                            |  9 ++++++-
+ src/finder/findercloud.cpp                    | 24 +++++++++++++++++--
+ src/finder/findercloudsheet.cpp               | 10 ++++++++
+ 5 files changed, 62 insertions(+), 3 deletions(-)
+ create mode 100644 3rdparty/rclone-patches/0001-iclouddrive-keep-Apple-s-reason-for-a-refused-sign-in.patch
+
+diff --git a/.gitmodules b/.gitmodules
+index 61e6df525..488e7e06d 100644
+--- a/.gitmodules
++++ b/.gitmodules
+@@ -2,3 +2,4 @@
+ 	path = 3rdparty/rclone
+ 	url = https://github.com/rclone/rclone
+ 	shallow = true
++	ignore = dirty
+diff --git a/3rdparty/rclone-patches/0001-iclouddrive-keep-Apple-s-reason-for-a-refused-sign-in.patch b/3rdparty/rclone-patches/0001-iclouddrive-keep-Apple-s-reason-for-a-refused-sign-in.patch
+new file mode 100644
+index 000000000..bbf81aee4
+--- /dev/null
++++ b/3rdparty/rclone-patches/0001-iclouddrive-keep-Apple-s-reason-for-a-refused-sign-in.patch
+@@ -0,0 +1,21 @@
++iclouddrive: keep Apple's reason for a refused sign-in
++
++Apple answers 403 both for a wrong password and for an account it has
++locked (serviceErrors code -20209, "This Apple Account has been locked
++for security reasons"). rclone reported both as "incorrect username or
++password", so a locked account looked like a typo. Keep Apple's reply in
++the error; Finder shows its message.
++
++diff --git a/backend/iclouddrive/api/session.go b/backend/iclouddrive/api/session.go
++index 3fd964c..6c74d87 100644
++--- a/backend/iclouddrive/api/session.go
+++++ b/backend/iclouddrive/api/session.go
++@@ -436,7 +436,7 @@ func (s *Session) authSRPComplete(ctx context.Context, accountName, m1Base64, m2
++ 		fs.Debugf(nil, "iclouddrive: SRP sign in returned 412, attempting repair/complete")
++ 		return s.authRepairComplete(ctx)
++ 	case http.StatusForbidden:
++-		return fmt.Errorf("sign in failed: incorrect username or password")
+++		return fmt.Errorf("sign in failed: incorrect username or password (Apple said: %s)", respBody)
++ 	default:
++ 		return fmt.Errorf("sign in failed: %s: %s", resp.Status, respBody)
++ 	}
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 375447d23..1da4179ac 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -589,13 +589,20 @@ set(FINDER_RCLONE_SOURCE "${CMAKE_SOURCE_DIR}/3rdparty/rclone")
+ if(FINDER_BUNDLE_RCLONE AND GO_EXECUTABLE AND EXISTS "${FINDER_RCLONE_SOURCE}/go.mod")
+     set(FINDER_RCLONE_BINARY "${CMAKE_CURRENT_BINARY_DIR}/rclone")
+     file(GLOB_RECURSE FINDER_RCLONE_GO CONFIGURE_DEPENDS "${FINDER_RCLONE_SOURCE}/*.go")
++    # Finder's fixes to rclone, applied to the submodule unless already in.
++    file(GLOB FINDER_RCLONE_PATCHES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/3rdparty/rclone-patches/*.patch")
++    set(FINDER_RCLONE_APPLY)
++    foreach(patch ${FINDER_RCLONE_PATCHES})
++        list(APPEND FINDER_RCLONE_APPLY COMMAND sh -c "git apply --reverse --check \"$1\" 2>/dev/null || git apply \"$1\"" sh "${patch}")
++    endforeach()
+     add_custom_command(
+         OUTPUT "${FINDER_RCLONE_BINARY}"
++        ${FINDER_RCLONE_APPLY}
+         COMMAND ${CMAKE_COMMAND} -E env CGO_ENABLED=0 GOFLAGS=-mod=mod
+                 "GOCACHE=${CMAKE_CURRENT_BINARY_DIR}/go-cache"
+                 ${GO_EXECUTABLE} build -trimpath -ldflags "-s -w -X github.com/rclone/rclone/fs.VersionSuffix=finder" -o "${FINDER_RCLONE_BINARY}" .
+         WORKING_DIRECTORY "${FINDER_RCLONE_SOURCE}"
+-        DEPENDS ${FINDER_RCLONE_GO} "${FINDER_RCLONE_SOURCE}/go.mod" "${FINDER_RCLONE_SOURCE}/go.sum"
++        DEPENDS ${FINDER_RCLONE_GO} ${FINDER_RCLONE_PATCHES} "${FINDER_RCLONE_SOURCE}/go.mod" "${FINDER_RCLONE_SOURCE}/go.sum"
+         COMMENT "Building rclone for Finder's Google Drive"
+         VERBATIM
+     )
+diff --git a/src/finder/findercloud.cpp b/src/finder/findercloud.cpp
+index f90eb3641..f6220dee1 100644
+--- a/src/finder/findercloud.cpp
++++ b/src/finder/findercloud.cpp
+@@ -8,6 +8,7 @@
+ 
+ #include <KLocalizedString>
+ 
++#include <QDebug>
+ #include <QDesktopServices>
+ #include <QDir>
+ #include <QFile>
+@@ -546,8 +547,27 @@ void FinderCloud::runConfigStep(const QStringList &args, std::function<void(cons
+         }
+         const QJsonObject out = QJsonDocument::fromJson(process->readAllStandardOutput()).object();
+         if (status != QProcess::NormalExit || code != 0 || out.isEmpty()) {
+-            QString error = rcloneError(process->readAllStandardError());
+-            if (error.contains(QLatin1String("incorrect username or password"), Qt::CaseInsensitive)) {
++            const QByteArray stderrText = process->readAllStandardError();
++            // The whole story goes to the journal (journalctl --user -t finder);
++            // the sheet only shows the gist. The password is never in it.
++            qWarning().noquote() << "Finder: iCloud sign-in failed (rclone exit" << code << "):" << QString::fromUtf8(stderrText).trimmed();
++            QString error = rcloneError(stderrText);
++            // Apple's own reason, when rclone passes it on (see
++            // 3rdparty/rclone-patches): e.g. a locked account, not a typo.
++            QString apple;
++            if (const int said = stderrText.indexOf("Apple said: "); said >= 0) {
++                const QByteArray reply = stderrText.mid(said + 12);
++                const int start = reply.indexOf('{');
++                const int end = reply.lastIndexOf('}');
++                const QJsonObject body = QJsonDocument::fromJson(reply.mid(start, end - start + 1)).object();
++                const QJsonArray errors = body.value(QLatin1String("serviceErrors")).toArray();
++                if (!errors.isEmpty()) {
++                    apple = errors.at(0).toObject().value(QLatin1String("message")).toString();
++                }
++            }
++            if (!apple.isEmpty()) {
++                error = apple;
++            } else if (error.contains(QLatin1String("incorrect username or password"), Qt::CaseInsensitive)) {
+                 error = i18nc("@info Finder cloud drive", "Your Apple ID or password is incorrect.");
+             } else if (error.contains(QLatin1String("validate2FACode")) || error.contains(QLatin1String("validateSMSCode"))) {
+                 error = i18nc("@info Finder cloud drive", "That code didn't work. Check it and try again, or sign in again for a new one.");
+diff --git a/src/finder/findercloudsheet.cpp b/src/finder/findercloudsheet.cpp
+index a4cf1f352..ad0d480e6 100644
+--- a/src/finder/findercloudsheet.cpp
++++ b/src/finder/findercloudsheet.cpp
+@@ -9,6 +9,7 @@
+ 
+ #include <KLocalizedString>
+ 
++#include <QAction>
+ #include <QDesktopServices>
+ #include <QHBoxLayout>
+ #include <QIcon>
+@@ -269,6 +270,15 @@ FinderICloudSheet::FinderICloudSheet(FinderCloud *cloud, QWidget *parent)
+     m_password = new QLineEdit(account);
+     m_password->setEchoMode(QLineEdit::Password);
+     m_password->setPlaceholderText(i18nc("@info:placeholder", "Password"));
++    // An eye at the end of the field shows the password, to check it.
++    QAction *reveal = m_password->addAction(QIcon::fromTheme(QStringLiteral("view-visible")), QLineEdit::TrailingPosition);
++    reveal->setCheckable(true);
++    reveal->setToolTip(i18nc("@info:tooltip", "Show password"));
++    connect(reveal, &QAction::toggled, this, [this, reveal](bool shown) {
++        m_password->setEchoMode(shown ? QLineEdit::Normal : QLineEdit::Password);
++        reveal->setIcon(QIcon::fromTheme(shown ? QStringLiteral("view-hidden") : QStringLiteral("view-visible")));
++        reveal->setToolTip(shown ? i18nc("@info:tooltip", "Hide password") : i18nc("@info:tooltip", "Show password"));
++    });
+     a->addWidget(m_appleId);
+     a->addWidget(m_password);
+     a->addWidget(noteText(i18nc("@info Finder iCloud",
+-- 
+2.56.0
+
