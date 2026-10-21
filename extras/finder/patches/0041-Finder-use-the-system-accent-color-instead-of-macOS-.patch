@@ -1,0 +1,324 @@
+From 810ffb2efc51d26b5e3db41f078952b3930d0dda Mon Sep 17 00:00:00 2001
+From: Brhett <36874370+jingledingle521@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 22:52:37 -0500
+Subject: [PATCH 41/42] Finder: use the system accent color instead of macOS
+ blue
+
+finderAccent() reads the accent picked in System Settings from
+kdeglobals ([General] AccentColor). The palette only carries KDE's darker
+selection shade. The accent is read again whenever the palette changes,
+so switching it takes effect without a restart. Selections, AirDrop,
+transfer cards and the file chooser's default button use it; the
+sidebar follows in the next commit.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/dolphincontextmenu.cpp                  |  3 +-
+ src/finder/filechooser/finderfiledialog.cpp | 15 ++++++--
+ src/finder/finderaccent.h                   | 42 +++++++++++++++++++++
+ src/finder/finderairdrop.cpp                |  4 +-
+ src/finder/finderairdropservice.cpp         |  6 +--
+ src/finder/finderairdropsheet.cpp           |  3 +-
+ src/finder/findercolumnview.cpp             |  6 +--
+ src/finder/findertransfers.cpp              |  6 +--
+ src/kitemviews/kstandarditemlistwidget.cpp  |  7 ++--
+ 9 files changed, 72 insertions(+), 20 deletions(-)
+ create mode 100644 src/finder/finderaccent.h
+
+diff --git a/src/dolphincontextmenu.cpp b/src/dolphincontextmenu.cpp
+index a6f2e4c48..797ec8469 100644
+--- a/src/dolphincontextmenu.cpp
++++ b/src/dolphincontextmenu.cpp
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include "dolphincontextmenu.h"
++#include "finder/finderaccent.h"
+ 
+ #include "dolphin_contextmenusettings.h"
+ #include "dolphin_generalsettings.h"
+@@ -321,7 +322,7 @@ void DolphinContextMenu::addItemContextMenu()
+     }
+     if (!shareable.isEmpty() && shareable.size() == m_selectedItems.size()) {
+         QMenu *share = addMenu(QIcon::fromTheme(QStringLiteral("document-share")), i18nc("@action:inmenu Finder", "Share"));
+-        share->addAction(FinderAirDropView::icon(QColor(0x0a, 0x84, 0xff)), i18nc("@action:inmenu Finder", "AirDrop…"), this, [this, shareable]() {
++        share->addAction(FinderAirDropView::icon(finderAccent()), i18nc("@action:inmenu Finder", "AirDrop…"), this, [this, shareable]() {
+             FinderAirDrop::instance()->share(shareable, m_mainWindow);
+         });
+         addSeparator();
+diff --git a/src/finder/filechooser/finderfiledialog.cpp b/src/finder/filechooser/finderfiledialog.cpp
+index 5112c2793..94bc98ed1 100644
+--- a/src/finder/filechooser/finderfiledialog.cpp
++++ b/src/finder/filechooser/finderfiledialog.cpp
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include "finderfiledialog.h"
++#include "finder/finderaccent.h"
+ #include "finder/finderchrome.h"
+ #include "finder/findersidebar.h"
+ #include "views/dolphinview.h"
+@@ -137,15 +138,21 @@ FinderFileDialog::FinderFileDialog(const Options &options)
+     m_accept->setDefault(true);
+     connect(m_accept, &QPushButton::clicked, this, &FinderFileDialog::accept);
+     row->addWidget(m_accept);
++    // The system accent color, as macOS uses its accent for default buttons.
++    const QColor accent = finderAccent();
+     bar->setStyleSheet(QStringLiteral(
+         "#chooserBar { border-top: 1px solid rgba(255,255,255,24); }"
+         "QLineEdit { background: rgba(255,255,255,14); border: 1px solid rgba(255,255,255,30); border-radius: 7px; padding: 4px 8px; }"
+-        "QLineEdit:focus { border: 1px solid #0a84ff; }"
++        "QLineEdit:focus { border: 1px solid %1; }"
+         "QPushButton { border: none; border-radius: 7px; padding: 6px 18px; min-width: 64px; background: rgba(255,255,255,30); color: white; }"
+         "QPushButton:hover { background: rgba(255,255,255,44); }"
+-        "QPushButton#chooserAccept { background: #0a84ff; }"
+-        "QPushButton#chooserAccept:hover { background: #3a9bff; }"
+-        "QPushButton#chooserAccept:disabled { background: rgba(10,132,255,90); color: rgba(255,255,255,120); }"));
++        "QPushButton#chooserAccept { background: %1; }"
++        "QPushButton#chooserAccept:hover { background: %2; }"
++        "QPushButton#chooserAccept:disabled { background: rgba(%3,%4,%5,90); color: rgba(255,255,255,120); }")
++                          .arg(accent.name(), accent.lighter(115).name())
++                          .arg(accent.red())
++                          .arg(accent.green())
++                          .arg(accent.blue()));
+     layout->addWidget(bar);
+     setCentralWidget(central);
+ 
+diff --git a/src/finder/finderaccent.h b/src/finder/finderaccent.h
+new file mode 100644
+index 000000000..4e6b43787
+--- /dev/null
++++ b/src/finder/finderaccent.h
+@@ -0,0 +1,42 @@
++/*
++ * SPDX-FileCopyrightText: 2026 Brhett
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef FINDERACCENT_H
++#define FINDERACCENT_H
++
++#include <KConfigGroup>
++#include <KSharedConfig>
++
++#include <QColor>
++#include <QGuiApplication>
++#include <QPalette>
++
++/**
++ * The accent color picked in System Settings, which Finder uses where macOS
++ * uses its accent color: selections, sidebar icons, focus rings.
++ *
++ * The palette only carries KDE's selection color, a darker shade derived from
++ * the accent, so the accent itself is read from kdeglobals. It's read again
++ * whenever the palette changes, which is what changing the accent does.
++ */
++inline QColor finderAccent()
++{
++    static QColor accent;
++    static QRgb seenHighlight = 0;
++    const QColor highlight = QGuiApplication::palette().color(QPalette::Highlight);
++    if (!accent.isValid() || highlight.rgba() != seenHighlight) {
++        seenHighlight = highlight.rgba();
++        KSharedConfigPtr globals = KSharedConfig::openConfig(QStringLiteral("kdeglobals"));
++        globals->reparseConfiguration();
++        accent = KConfigGroup(globals, QStringLiteral("General")).readEntry("AccentColor", QColor());
++        if (!accent.isValid()) {
++            accent = QGuiApplication::palette().color(QPalette::Accent);
++        }
++    }
++    return accent;
++}
++
++#endif
+diff --git a/src/finder/finderairdrop.cpp b/src/finder/finderairdrop.cpp
+index 6aaea988a..2e15301a2 100644
+--- a/src/finder/finderairdrop.cpp
++++ b/src/finder/finderairdrop.cpp
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include "finderairdrop.h"
++#include "finderaccent.h"
+ #include "finderairdropservice.h"
+ 
+ #include <KLocalizedString>
+@@ -19,7 +20,6 @@
+ 
+ namespace
+ {
+-const QColor Accent(0x0a, 0x84, 0xff);
+ const QColor ContentColor(32, 32, 37);
+ }
+ 
+@@ -142,7 +142,7 @@ void FinderAirDropView::paintEvent(QPaintEvent *)
+     p.setPen(Qt::NoPen);
+     QLinearGradient fill(center - QPointF(0, 40), center + QPointF(0, 40));
+     fill.setColorAt(0, QColor(0x5a, 0xc8, 0xfa));
+-    fill.setColorAt(1, Accent);
++    fill.setColorAt(1, finderAccent());
+     p.setBrush(fill);
+     p.drawEllipse(center, 40, 40);
+     const QPixmap glyph = icon(Qt::white).pixmap(QSize(52, 52), devicePixelRatioF());
+diff --git a/src/finder/finderairdropservice.cpp b/src/finder/finderairdropservice.cpp
+index d80e31a75..78d5306af 100644
+--- a/src/finder/finderairdropservice.cpp
++++ b/src/finder/finderairdropservice.cpp
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include "finderairdropservice.h"
++#include "finderaccent.h"
+ #include <memory>
+ #include <functional>
+ #include <QPointer>
+@@ -32,7 +33,6 @@
+ 
+ namespace
+ {
+-const QColor Accent(0x0a, 0x84, 0xff);
+ 
+ /** Child processes of @p root, recursively, read from /proc. */
+ QList<qint64> descendants(qint64 root)
+@@ -634,8 +634,8 @@ void FinderPeerTile::paintEvent(QPaintEvent *)
+     p.setRenderHint(QPainter::Antialiasing);
+     const QRectF circle((width() - 72) / 2.0, 4, 72, 72);
+     QLinearGradient fill(circle.topLeft(), circle.bottomLeft());
+-    fill.setColorAt(0, m_hot ? Accent.lighter(130) : QColor(150, 150, 160));
+-    fill.setColorAt(1, m_hot ? Accent : QColor(100, 100, 110));
++    fill.setColorAt(0, m_hot ? finderAccent().lighter(130) : QColor(150, 150, 160));
++    fill.setColorAt(1, m_hot ? finderAccent() : QColor(100, 100, 110));
+     p.setPen(Qt::NoPen);
+     p.setBrush(fill);
+     p.drawEllipse(circle);
+diff --git a/src/finder/finderairdropsheet.cpp b/src/finder/finderairdropsheet.cpp
+index c4b796825..9ced89966 100644
+--- a/src/finder/finderairdropsheet.cpp
++++ b/src/finder/finderairdropsheet.cpp
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include "finderairdropsheet.h"
++#include "finderaccent.h"
+ #include "finderairdrop.h"
+ #include "finderairdropservice.h"
+ 
+@@ -26,7 +27,7 @@ namespace
+ QLabel *glyph(QWidget *parent, int size)
+ {
+     auto *label = new QLabel(parent);
+-    label->setPixmap(FinderAirDropView::icon(QColor(0x0a, 0x84, 0xff)).pixmap(QSize(size, size), parent->devicePixelRatioF()));
++    label->setPixmap(FinderAirDropView::icon(finderAccent()).pixmap(QSize(size, size), parent->devicePixelRatioF()));
+     label->setAlignment(Qt::AlignCenter);
+     return label;
+ }
+diff --git a/src/finder/findercolumnview.cpp b/src/finder/findercolumnview.cpp
+index dab051b3c..153510915 100644
+--- a/src/finder/findercolumnview.cpp
++++ b/src/finder/findercolumnview.cpp
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include "findercolumnview.h"
++#include "finderaccent.h"
+ #include "finderairdrop.h"
+ #include "finderairdropservice.h"
+ 
+@@ -47,7 +48,6 @@ constexpr int RowHeight = 24;
+ constexpr int IconSize = 16;
+ constexpr int ColumnWidth = 230;
+ 
+-const QColor Accent(0x0a, 0x84, 0xff);
+ const QColor InactiveSelection(255, 255, 255, 46);
+ const QColor Divider(255, 255, 255, 20);
+ 
+@@ -96,7 +96,7 @@ public:
+         if (selected) {
+             QPainterPath path;
+             path.addRoundedRect(row, 5, 5);
+-            p->fillPath(path, focused ? Accent : InactiveSelection);
++            p->fillPath(path, focused ? finderAccent() : InactiveSelection);
+         }
+ 
+         const qreal dpr = p->device() ? p->device()->devicePixelRatioF() : 1.0;
+@@ -341,7 +341,7 @@ void FinderColumnView::showContextMenu(QAbstractItemView *column, const QPoint &
+         actions->insertOpenWithActionsTo(nullptr, &menu, QStringList());
+         if (!files.isEmpty() && files.size() == items.size()) {
+             QMenu *share = menu.addMenu(QIcon::fromTheme(QStringLiteral("document-share")), i18nc("@action:inmenu Finder", "Share"));
+-            share->addAction(FinderAirDropView::icon(QColor(0x0a, 0x84, 0xff)), i18nc("@action:inmenu Finder", "AirDrop…"), this, [this, files]() {
++            share->addAction(FinderAirDropView::icon(finderAccent()), i18nc("@action:inmenu Finder", "AirDrop…"), this, [this, files]() {
+                 FinderAirDrop::instance()->share(files, window());
+             });
+         }
+diff --git a/src/finder/findertransfers.cpp b/src/finder/findertransfers.cpp
+index 797574411..4171d0858 100644
+--- a/src/finder/findertransfers.cpp
++++ b/src/finder/findertransfers.cpp
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include "findertransfers.h"
++#include "finderaccent.h"
+ #include "finderairdrop.h"
+ 
+ #include <KFormat>
+@@ -20,7 +21,6 @@
+ 
+ namespace
+ {
+-const QColor Accent(0x0a, 0x84, 0xff);
+ constexpr int CardWidth = 340;
+ 
+ /** One transfer: icon, title, detail, a thin progress bar and an action button. */
+@@ -110,7 +110,7 @@ protected:
+ 
+         // AirDrop badge: blue disc with the glyph; green tick when done, red when failed.
+         const QRectF badge(14, 14, 38, 38);
+-        QColor badgeColor = Accent;
++        QColor badgeColor = finderAccent();
+         if (m_transfer.state == FinderTransfer::Done) {
+             badgeColor = QColor(0x30, 0xd1, 0x58);
+         } else if (m_transfer.state == FinderTransfer::Failed) {
+@@ -135,7 +135,7 @@ protected:
+         if (fraction > 0 && m_transfer.state != FinderTransfer::Failed) {
+             QPainterPath bar;
+             bar.addRoundedRect(QRectF(track.left(), track.top(), std::max(5.0, track.width() * fraction), track.height()), 2.5, 2.5);
+-            p.fillPath(bar, m_transfer.state == FinderTransfer::Done ? QColor(0x30, 0xd1, 0x58) : Accent);
++            p.fillPath(bar, m_transfer.state == FinderTransfer::Done ? QColor(0x30, 0xd1, 0x58) : finderAccent());
+         }
+     }
+ 
+diff --git a/src/kitemviews/kstandarditemlistwidget.cpp b/src/kitemviews/kstandarditemlistwidget.cpp
+index 8932f7587..32b0976c5 100644
+--- a/src/kitemviews/kstandarditemlistwidget.cpp
++++ b/src/kitemviews/kstandarditemlistwidget.cpp
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include "kstandarditemlistwidget.h"
++#include "finder/finderaccent.h"
+ 
+ #include "dolphin_contentdisplaysettings.h"
+ #include "kfileitemlistview.h"
+@@ -479,14 +480,14 @@ void KStandardItemListWidget::paint(QPainter *painter, const QStyleOptionGraphic
+ bool KStandardItemListWidget::paintFinderHighlight(QPainter *painter, QWidget *widget, bool selected)
+ {
+     // Finder: no hover or focus marks; a selected item gets a gray tile behind
+-    // its icon and a blue pill behind its name (a blue row in list view).
+-    // Without keyboard focus the blue turns gray.
++    // its icon and an accent-colored pill behind its name (a row in list
++    // view). Without keyboard focus the accent turns gray.
+     if (!selected) {
+         return true;
+     }
+     triggerCacheRefreshing();
+     const bool focused = isActiveWindow() && widget->hasFocus();
+-    const QColor accent = focused ? QColor(0x0a, 0x84, 0xff) : QColor(255, 255, 255, 46);
++    const QColor accent = focused ? finderAccent() : QColor(255, 255, 255, 46);
+ 
+     painter->save();
+     painter->setRenderHint(QPainter::Antialiasing);
+-- 
+2.56.0
+

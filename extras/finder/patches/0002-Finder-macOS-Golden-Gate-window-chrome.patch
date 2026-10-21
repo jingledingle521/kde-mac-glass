@@ -1,7 +1,7 @@
 From 51cbcd8ae20a3468a30ec6df019b53cb91114cef Mon Sep 17 00:00:00 2001
 From: Brhett <36874370+jingledingle521@users.noreply.github.com>
 Date: Sun, 18 Oct 2026 09:48:02 -0500
-Subject: [PATCH 02/38] Finder: macOS Golden Gate window chrome
+Subject: [PATCH 02/42] Finder: macOS Golden Gate window chrome
 
 Frameless translucent window with its own rounded background, KWin native
 shadow and blurred glass sidebar, stoplights at the start of the toolbar,

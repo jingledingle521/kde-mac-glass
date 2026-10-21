@@ -1,0 +1,32 @@
+From 56eef1c9dcd909981ec797ec3fd8e29dbb82917d Mon Sep 17 00:00:00 2001
+From: Brhett <36874370+jingledingle521@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 22:52:37 -0500
+Subject: [PATCH 40/42] Finder: no "+" selection markers on hover
+
+macOS Finder has none, so ShowSelectionToggle now defaults to off.
+Ctrl-click, Shift-click and rubber-band selection are unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/settings/dolphin_generalsettings.kcfg | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/settings/dolphin_generalsettings.kcfg b/src/settings/dolphin_generalsettings.kcfg
+index d191b978d..bb561d3a2 100644
+--- a/src/settings/dolphin_generalsettings.kcfg
++++ b/src/settings/dolphin_generalsettings.kcfg
+@@ -107,9 +107,10 @@
+             <label>Rename single items inline</label>
+             <default>true</default>
+         </entry>
++        <!-- Finder: no "+" selection markers on hover, as in macOS Finder -->
+         <entry name="ShowSelectionToggle" type="Bool">
+             <label>Show selection toggle</label>
+-            <default>true</default>
++            <default>false</default>
+         </entry>
+         <entry name="ShowPasteBarAfterCopying" type="Bool">
+             <label>Show a bar for easy pasting after a cut or copy was done using the selection mode bottom bar.</label>
+-- 
+2.56.0
+
