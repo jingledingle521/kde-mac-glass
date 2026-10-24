@@ -1,0 +1,330 @@
+From 3ac1375ee7af902467994c2b5897f2fd079541eb Mon Sep 17 00:00:00 2001
+From: Brhett <36874370+jingledingle521@users.noreply.github.com>
+Date: Sat, 24 Oct 2026 18:44:14 -0500
+Subject: [PATCH 46/47] Finder: keep slow work off the GUI thread; cheaper
+ repaints
+
+The cloud drive poll checked the mount with QStorageInfo every 2 seconds.
+That statfs()es the rclone mount, and rclone answers it with a call to
+Google every 5 minutes, which took more than 3 seconds, so the window
+froze. Read /proc/self/mountinfo instead. The once-a-minute quota call
+now waits 30 seconds instead of hanging up after 3, which cancelled it
+every time ("context canceled" in the mount's log).
+
+AirDrop no longer blocks the window: stopping the peer lookup doesn't
+wait up to 2 seconds for it to exit, and the receiver's PID is looked up
+in the background, not with a blocking systemctl twice a second.
+
+Repaints: the sidebar caches tinted icons, and its sync spinner redraws
+only the cloud rows. The window background finds the status bars every
+half second, not by walking the widget tree on every paint. The size
+formatter compiles its regex once, and the view repaints for zebra
+stripes only when it has them.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/finder/finderairdropservice.cpp    | 33 ++++++++++++++++------
+ src/finder/finderairdropservice.h      |  2 ++
+ src/finder/finderchrome.cpp            | 16 +++++++++--
+ src/finder/finderchrome.h              |  3 ++
+ src/finder/findercloud.cpp             | 38 +++++++++++++++++++++-----
+ src/finder/findersidebar.cpp           | 30 +++++++++++++++++---
+ src/kitemviews/kfileitemlistwidget.cpp |  3 +-
+ src/kitemviews/kitemlistview.cpp       |  4 ++-
+ 8 files changed, 106 insertions(+), 23 deletions(-)
+
+diff --git a/src/finder/finderairdropservice.cpp b/src/finder/finderairdropservice.cpp
+index 78d5306af..b5ef40d33 100644
+--- a/src/finder/finderairdropservice.cpp
++++ b/src/finder/finderairdropservice.cpp
+@@ -273,10 +273,13 @@ void FinderAirDrop::stopPeers()
+ {
+     if (m_peersProcess) {
+         // omdrop runs the lookup as its own process group and cleans up on TERM.
+-        m_peersProcess->disconnect(this);
+-        m_peersProcess->terminate();
+-        m_peersProcess->waitForFinished(2000);
+-        m_peersProcess->deleteLater();
++        // Don't wait for it here: that froze the window for up to 2 seconds.
++        QProcess *process = m_peersProcess;
++        m_peersProcess = nullptr;
++        process->disconnect(this);
++        connect(process, &QProcess::finished, process, &QObject::deleteLater);
++        QTimer::singleShot(2000, process, &QProcess::kill);
++        process->terminate();
+     }
+ }
+ 
+@@ -585,10 +588,24 @@ void FinderAirDrop::pollProgress()
+     if (m_incoming && m_transfers[m_incoming].state == FinderTransfer::Running) {
+         active = true;
+         FinderTransfer &t = m_transfers[m_incoming];
+-        QProcess pidQuery;
+-        pidQuery.start(QStringLiteral("systemctl"), {QStringLiteral("--user"), QStringLiteral("show"), QStringLiteral("-p"), QStringLiteral("MainPID"), QStringLiteral("--value"), QStringLiteral("airdrop-receiver")});
+-        pidQuery.waitForFinished(1000);
+-        const qint64 pid = pidQuery.readAllStandardOutput().trimmed().toLongLong();
++        // Look the receiver's PID up in the background (this runs twice a
++        // second, and waiting for systemctl here stalled the window).
++        if (!m_pidQuery) {
++            auto *pidQuery = new QProcess(this);
++            m_pidQuery = pidQuery;
++            connect(pidQuery, &QProcess::finished, this, [this, pidQuery]() {
++                m_receiverPid = pidQuery->readAllStandardOutput().trimmed().toLongLong();
++                pidQuery->deleteLater();
++            });
++            connect(pidQuery, &QProcess::errorOccurred, pidQuery, [pidQuery](QProcess::ProcessError error) {
++                if (error == QProcess::FailedToStart) {
++                    pidQuery->deleteLater();
++                }
++            });
++            pidQuery->start(QStringLiteral("systemctl"),
++                            {QStringLiteral("--user"), QStringLiteral("show"), QStringLiteral("-p"), QStringLiteral("MainPID"), QStringLiteral("--value"), QStringLiteral("airdrop-receiver")});
++        }
++        const qint64 pid = m_receiverPid;
+         qint64 bytes = -1;
+         const QString downloads = QDir::homePath() + QStringLiteral("/Downloads/");
+         if (pid > 0) {
+diff --git a/src/finder/finderairdropservice.h b/src/finder/finderairdropservice.h
+index a69e551c1..d158b865d 100644
+--- a/src/finder/finderairdropservice.h
++++ b/src/finder/finderairdropservice.h
+@@ -125,6 +125,8 @@ private:
+     QHash<QString, int> m_uploads; // receiver TransferID -> transfer id
+     qint64 m_lastIncomingBytes = -1;
+     int m_incomingStalls = 0;
++    qint64 m_receiverPid = 0; // airdrop-receiver's main process, looked up in the background
++    QPointer<QProcess> m_pidQuery;
+ };
+ 
+ /** A nearby device as a round tile with initials; files can be dropped on it. */
+diff --git a/src/finder/finderchrome.cpp b/src/finder/finderchrome.cpp
+index 0479af8c1..a2b4dc809 100644
+--- a/src/finder/finderchrome.cpp
++++ b/src/finder/finderchrome.cpp
+@@ -1249,8 +1249,20 @@ void FinderChrome::paintBackground()
+ 
+ 
+     // A hairline above Finder's footer (Dolphin's status bar).
+-    for (QWidget *child : m_window->findChildren<QWidget *>()) {
+-        if (child->isVisible() && qstrcmp(child->metaObject()->className(), "DolphinStatusBar") == 0) {
++    // The window repaints on every hover and scroll in the (transparent) file
++    // view, so don't walk the whole widget tree each time; look again every
++    // half second, which catches new tabs and split views.
++    if (!m_statusBarsAge.isValid() || m_statusBarsAge.elapsed() > 500) {
++        m_statusBars.clear();
++        for (QWidget *child : m_window->findChildren<QWidget *>()) {
++            if (qstrcmp(child->metaObject()->className(), "DolphinStatusBar") == 0) {
++                m_statusBars.append(child);
++            }
++        }
++        m_statusBarsAge.start();
++    }
++    for (const QPointer<QWidget> &child : std::as_const(m_statusBars)) {
++        if (child && child->isVisible()) {
+             const QPoint top = child->mapTo(m_window, QPoint(0, 0));
+             p.fillRect(QRectF(top.x(), top.y(), child->width(), 1), QColor(0, 0, 0, 120));
+         }
+diff --git a/src/finder/finderchrome.h b/src/finder/finderchrome.h
+index d6e0fe002..2c68cfee9 100644
+--- a/src/finder/finderchrome.h
++++ b/src/finder/finderchrome.h
+@@ -7,6 +7,7 @@
+ #ifndef FINDERCHROME_H
+ #define FINDERCHROME_H
+ 
++#include <QElapsedTimer>
+ #include <QIcon>
+ #include <QObject>
+ #include <QPointer>
+@@ -108,6 +109,8 @@ private:
+     KWindowShadow *m_shadow = nullptr;
+     QRegion m_appliedBlur; // last blur region sent to KWin
+     bool m_blurApplied = false;
++    QList<QPointer<QWidget>> m_statusBars; // footers to draw a hairline over, found now and then
++    QElapsedTimer m_statusBarsAge;
+     bool m_surfaceReady = false; // effects sent for the current native surface
+     Qt::Edges m_cursorEdges;
+ 
+diff --git a/src/finder/findercloud.cpp b/src/finder/findercloud.cpp
+index f6220dee1..960b2f84c 100644
+--- a/src/finder/findercloud.cpp
++++ b/src/finder/findercloud.cpp
+@@ -24,11 +24,35 @@
+ #include <QProcess>
+ #include <QRegularExpression>
+ #include <QStandardPaths>
+-#include <QStorageInfo>
+ #include <QUrlQuery>
+ 
+ namespace
+ {
++/**
++ * Whether an rclone mount sits at @p path, read from the mount table.
++ * Never statfs() the mount itself (QStorageInfo does): rclone answers that
++ * with a call to the provider, which can take seconds, and this runs on the
++ * GUI thread every couple of seconds.
++ */
++bool isRcloneMount(const QString &path)
++{
++    QFile mounts(QStringLiteral("/proc/self/mountinfo"));
++    if (!mounts.open(QIODevice::ReadOnly)) {
++        return false;
++    }
++    // Spaces in mount points are written as \040 ("Google Drive").
++    const QByteArray wanted = path.toUtf8().replace('\\', "\\134").replace(' ', "\\040");
++    for (const QByteArray &line : mounts.readAll().split('\n')) {
++        // "id parent dev root MOUNTPOINT options [tags…] - FSTYPE source …"
++        const QList<QByteArray> fields = line.split(' ');
++        const int dash = fields.indexOf("-");
++        if (fields.size() > 4 && dash > 0 && dash + 1 < fields.size() && fields.at(4) == wanted && fields.at(dash + 1).startsWith("fuse.rclone")) {
++            return true;
++        }
++    }
++    return false;
++}
++
+ QString runtimeDir()
+ {
+     const QString dir = qEnvironmentVariable("XDG_RUNTIME_DIR");
+@@ -736,9 +760,7 @@ void FinderCloud::poll()
+         }
+         return;
+     }
+-    const QStorageInfo storage(mountPath());
+-    const bool mounted = storage.isValid() && storage.rootPath() == mountPath() && storage.fileSystemType().startsWith("fuse.rclone");
+-    if (mounted) {
++    if (isRcloneMount(mountPath())) {
+         setState(Ready);
+         requestStats();
+         return;
+@@ -815,7 +837,7 @@ namespace
+ // One call to rclone's remote control API: HTTP/1.0 over the unix socket, so
+ // the reply comes back whole, without chunking, and the socket then closes.
+ void rcCall(QObject *context, const QString &socketPath, const QString &method, std::function<void(const QJsonObject &, const QByteArray &)> done,
+-            const QByteArray &params = "{}")
++            const QByteArray &params = "{}", int timeout = 3000)
+ {
+     auto *socket = new QLocalSocket(context);
+     auto finish = [socket, done]() {
+@@ -838,7 +860,7 @@ void rcCall(QObject *context, const QString &socketPath, const QString &method,
+     });
+     QObject::connect(socket, &QLocalSocket::disconnected, socket, finish);
+     QObject::connect(socket, &QLocalSocket::errorOccurred, socket, finish);
+-    QTimer::singleShot(3000, socket, finish);
++    QTimer::singleShot(timeout, socket, finish);
+     socket->connectToServer(socketPath);
+ }
+ }
+@@ -851,6 +873,8 @@ void FinderCloud::requestStats()
+     m_statsPending = true;
+     // Once a minute, ask the provider itself (for the quota): a mount whose
+     // credentials were revoked only fails when something touches the drive.
++    // Google often takes longer than 3 seconds to answer; hanging up early
++    // cancels the call (rclone logs "context canceled") and tells us nothing.
+     if (++m_statsPolls % 30 == 1) {
+         rcCall(
+             this, socketPath(), QStringLiteral("operations/about"),
+@@ -859,7 +883,7 @@ void FinderCloud::requestStats()
+                     signedOut();
+                 }
+             },
+-            "{\"fs\":\"" + remote().toLatin1() + ":\"}");
++            "{\"fs\":\"" + remote().toLatin1() + ":\"}", 30000);
+     }
+     rcCall(this, socketPath(), QStringLiteral("vfs/stats"), [this](const QJsonObject &vfs, const QByteArray &) {
+         rcCall(this, socketPath(), QStringLiteral("core/stats"), [this, vfs](const QJsonObject &core, const QByteArray &) {
+diff --git a/src/finder/findersidebar.cpp b/src/finder/findersidebar.cpp
+index 641bd0356..648d2e792 100644
+--- a/src/finder/findersidebar.cpp
++++ b/src/finder/findersidebar.cpp
+@@ -23,6 +23,7 @@
+ #include <QDesktopServices>
+ #include <QDrag>
+ #include <QFileInfo>
++#include <QHash>
+ #include <QMimeData>
+ #include <QIcon>
+ #include <QMenu>
+@@ -124,10 +125,21 @@ public:
+ 
+         // Golden Gate: accent-colored sidebar icons while the window is active.
+         const QString iconName = index.data(Qt::DecorationRole).toString();
+-        static const QIcon airDrop = FinderAirDropView::icon(Qt::white);
+-        const QIcon icon = iconName == QLatin1String("finder-airdrop") ? airDrop : QIcon::fromTheme(iconName);
+         const qreal dpr = p->device() ? p->device()->devicePixelRatioF() : 1.0;
+-        const QPixmap pm = tinted(icon, IconSize, dpr, active ? finderAccent() : QColor(160, 160, 165));
++        const QColor color = active ? finderAccent() : QColor(160, 160, 165);
++        // Tinting means a theme lookup and a fresh pixmap per row, and the
++        // sidebar repaints 30 times a second while a cloud drive syncs.
++        const QString key = iconName + QLatin1Char('|') + QString::number(color.rgba()) + QLatin1Char('|') + QString::number(dpr);
++        QPixmap pm = m_tinted.value(key);
++        if (pm.isNull()) {
++            static const QIcon airDrop = FinderAirDropView::icon(Qt::white);
++            const QIcon icon = iconName == QLatin1String("finder-airdrop") ? airDrop : QIcon::fromTheme(iconName);
++            pm = tinted(icon, IconSize, dpr, color);
++            if (m_tinted.size() > 200) {
++                m_tinted.clear(); // icon theme or accent changes leave old entries behind
++            }
++            m_tinted.insert(key, pm);
++        }
+         const int iconX = int(pill.left()) + 8;
+         p->drawPixmap(QPoint(iconX, r.top() + (r.height() - IconSize) / 2), pm);
+ 
+@@ -166,6 +178,9 @@ public:
+                     QFontMetrics(font).elidedText(index.data(Qt::DisplayRole).toString(), Qt::ElideRight, textRect.width()));
+         p->restore();
+     }
++
++private:
++    mutable QHash<QString, QPixmap> m_tinted;
+ };
+ }
+ 
+@@ -224,7 +239,14 @@ FinderSidebar::FinderSidebar(KFilePlacesModel *places, QWidget *parent)
+         connect(cloud, &FinderCloud::activityChanged, this, &FinderSidebar::updateCloud);
+     }
+     m_spinner->setInterval(33);
+-    connect(m_spinner, &QTimer::timeout, viewport(), qOverload<>(&QWidget::update));
++    connect(m_spinner, &QTimer::timeout, this, [this]() {
++        // Only the spinning rows, not the whole sidebar (and the glass behind it).
++        for (int row = 0; row < m_model->rowCount(); ++row) {
++            if (cloudAt(m_model->index(row, 0))) {
++                viewport()->update(visualRect(m_model->index(row, 0)));
++            }
++        }
++    });
+     rebuild();
+ }
+ 
+diff --git a/src/kitemviews/kfileitemlistwidget.cpp b/src/kitemviews/kfileitemlistwidget.cpp
+index 75dc5b412..f8234f315 100644
+--- a/src/kitemviews/kfileitemlistwidget.cpp
++++ b/src/kitemviews/kfileitemlistwidget.cpp
+@@ -89,7 +89,8 @@ QString KFileItemListWidgetInformant::roleText(const QByteArray &role, const QHa
+             value /= 1000.0;
+             ++unit;
+         }
+-        const QString number = value >= 99.95 ? QString::number(qRound(value)) : QLocale().toString(value, 'f', 1).remove(QRegularExpression(QStringLiteral("[.,]0$")));
++        static const QRegularExpression trailingZero(QStringLiteral("[.,]0$")); // compiled once: this runs for every row
++        const QString number = value >= 99.95 ? QString::number(qRound(value)) : QLocale().toString(value, 'f', 1).remove(trailingZero);
+         return number + QLatin1Char(' ') + QLatin1String(units[unit]);
+     };
+ 
+diff --git a/src/kitemviews/kitemlistview.cpp b/src/kitemviews/kitemlistview.cpp
+index 1ce696b1c..39c170624 100644
+--- a/src/kitemviews/kitemlistview.cpp
++++ b/src/kitemviews/kitemlistview.cpp
+@@ -1922,7 +1922,9 @@ KItemListRubberBand *KItemListView::rubberBand() const
+ 
+ void KItemListView::doLayout(LayoutAnimationHint hint, int changedIndex, int changedCount)
+ {
+-    update(); // Finder: the zebra stripes follow the layout (see paint())
++    if (useAlternateBackgrounds()) {
++        update(); // Finder: the zebra stripes follow the layout (see paint())
++    }
+ 
+     if (m_activeTransactions > 0) {
+         if (hint == NoAnimation) {
+-- 
+2.56.0
+

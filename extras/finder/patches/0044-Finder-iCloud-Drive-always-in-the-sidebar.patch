@@ -1,7 +1,7 @@
 From dc0c77b91bc5c314e28799f834f6012a7e342c9b Mon Sep 17 00:00:00 2001
 From: Brhett <36874370+jingledingle521@users.noreply.github.com>
 Date: Tue, 20 Oct 2026 23:08:04 -0500
-Subject: [PATCH 44/45] Finder: iCloud Drive always in the sidebar
+Subject: [PATCH 44/47] Finder: iCloud Drive always in the sidebar
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

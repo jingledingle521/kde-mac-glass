@@ -1,7 +1,7 @@
 From 350d80c0a55e5fb85bdc297a77210138e98e9302 Mon Sep 17 00:00:00 2001
 From: Brhett <36874370+jingledingle521@users.noreply.github.com>
 Date: Tue, 20 Oct 2026 21:52:26 -0500
-Subject: [PATCH 39/45] Finder: Google Drive notices revoked sign-ins
+Subject: [PATCH 39/47] Finder: Google Drive notices revoked sign-ins
 
 A running rclone mount doesn't exit when Google revokes its token; it
 only logs failed requests. Finder now catches this three ways:
