@@ -239,6 +239,29 @@ PlasmoidItem {
         flags: Qt.FramelessWindowHint | Qt.WindowDoesNotAcceptFocus
         visible: true
 
+        // The compositor closes a layer window when its output goes away or
+        // is reconfigured (a TV plugged in, a scale change), and nothing
+        // shows it again. Reopen it, on the screen the menu bar is on.
+        readonly property var panelScreen: root.Window.window ? root.Window.window.screen : null
+        property bool reopening: false
+        onPanelScreenChanged: reopenTimer.restart()
+        onScreenGeometryChanged: reopenTimer.restart()
+        onVisibleChanged: if (!visible && !reopening) reopenTimer.restart()
+
+        Timer {
+            id: reopenTimer
+            interval: 500 // let the outputs settle
+            onTriggered: {
+                dockWindow.reopening = true;
+                dockWindow.visible = false;
+                if (dockWindow.panelScreen) {
+                    dockWindow.screen = dockWindow.panelScreen;
+                }
+                dockWindow.visible = true;
+                dockWindow.reopening = false;
+            }
+        }
+
         LayerShell.Window.scope: "macdock"
         LayerShell.Window.layer: LayerShell.Window.LayerTop
         LayerShell.Window.anchors: LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight | LayerShell.Window.AnchorBottom
