@@ -1,7 +1,7 @@
 From 810ffb2efc51d26b5e3db41f078952b3930d0dda Mon Sep 17 00:00:00 2001
 From: Brhett <36874370+jingledingle521@users.noreply.github.com>
 Date: Tue, 20 Oct 2026 22:52:37 -0500
-Subject: [PATCH 41/47] Finder: use the system accent color instead of macOS
+Subject: [PATCH 41/48] Finder: use the system accent color instead of macOS
  blue
 
 finderAccent() reads the accent picked in System Settings from

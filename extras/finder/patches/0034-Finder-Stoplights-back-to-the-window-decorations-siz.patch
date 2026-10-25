@@ -1,7 +1,7 @@
 From 5f8f41379c73d2bea802ff08aabd7aa8e452b59a Mon Sep 17 00:00:00 2001
 From: Brhett <36874370+jingledingle521@users.noreply.github.com>
 Date: Sun, 18 Oct 2026 21:17:16 -0500
-Subject: [PATCH 34/47] Finder: Stoplights back to the window decorations size
+Subject: [PATCH 34/48] Finder: Stoplights back to the window decorations size
 
 14.5 px circles 8.8 px apart, as every other window (the 16 px ones read
 as too big next to them). The lift and the drawn glyphs stay.

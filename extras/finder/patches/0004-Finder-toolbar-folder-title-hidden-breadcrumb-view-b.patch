@@ -1,7 +1,7 @@
 From 47ab26119c8a08188b9516c488bc51c3b847cc5c Mon Sep 17 00:00:00 2001
 From: Brhett <36874370+jingledingle521@users.noreply.github.com>
 Date: Sun, 18 Oct 2026 09:54:32 -0500
-Subject: [PATCH 04/47] Finder toolbar: folder title, hidden breadcrumb, view
+Subject: [PATCH 04/48] Finder toolbar: folder title, hidden breadcrumb, view
  buttons on the right
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

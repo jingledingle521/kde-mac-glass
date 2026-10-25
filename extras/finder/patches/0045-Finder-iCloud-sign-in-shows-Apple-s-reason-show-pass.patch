@@ -1,7 +1,7 @@
 From 89de75929b63ecf12bcbe9b528b3dc61fb553df6 Mon Sep 17 00:00:00 2001
 From: Brhett <36874370+jingledingle521@users.noreply.github.com>
 Date: Tue, 20 Oct 2026 23:40:18 -0500
-Subject: [PATCH 45/47] Finder: iCloud sign-in shows Apple's reason;
+Subject: [PATCH 45/48] Finder: iCloud sign-in shows Apple's reason;
  show-password eye
 
 Apple refuses a locked account (code -20209) with the same 403 as a

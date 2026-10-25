@@ -1,7 +1,7 @@
 From 3ac1375ee7af902467994c2b5897f2fd079541eb Mon Sep 17 00:00:00 2001
 From: Brhett <36874370+jingledingle521@users.noreply.github.com>
 Date: Sat, 24 Oct 2026 18:44:14 -0500
-Subject: [PATCH 46/47] Finder: keep slow work off the GUI thread; cheaper
+Subject: [PATCH 46/48] Finder: keep slow work off the GUI thread; cheaper
  repaints
 
 The cloud drive poll checked the mount with QStorageInfo every 2 seconds.

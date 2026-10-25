@@ -1,7 +1,7 @@
 From d092433dda437a1760224b0d7e80fc4f8ad40152 Mon Sep 17 00:00:00 2001
 From: Brhett <36874370+jingledingle521@users.noreply.github.com>
 Date: Sun, 18 Oct 2026 14:31:39 -0500
-Subject: [PATCH 25/47] Finder: macOS-style tabs
+Subject: [PATCH 25/48] Finder: macOS-style tabs
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

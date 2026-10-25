@@ -1,7 +1,7 @@
 From d38a9c6f2e162f221d083ddcedd6f62aa43249f7 Mon Sep 17 00:00:00 2001
 From: Brhett <36874370+jingledingle521@users.noreply.github.com>
 Date: Tue, 20 Oct 2026 22:58:05 -0500
-Subject: [PATCH 43/47] Finder: fix a crash at startup in the sidebar
+Subject: [PATCH 43/48] Finder: fix a crash at startup in the sidebar
 
 rebuild() took begin and end iterators from two separate temporaries of
 FinderCloud::all(), so std::any_of walked off into freed memory. Every

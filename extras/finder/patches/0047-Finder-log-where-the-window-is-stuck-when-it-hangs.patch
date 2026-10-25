@@ -1,7 +1,7 @@
 From 8bfce014c33e92535ce79713113315dd1df887a6 Mon Sep 17 00:00:00 2001
 From: Brhett <36874370+jingledingle521@users.noreply.github.com>
 Date: Sat, 24 Oct 2026 18:44:14 -0500
-Subject: [PATCH 47/47] Finder: log where the window is stuck when it hangs
+Subject: [PATCH 47/48] Finder: log where the window is stuck when it hangs
 
 A watchdog thread expects a heartbeat from the GUI thread ten times a
 second. Stalls of about 300 ms or more get a line in
